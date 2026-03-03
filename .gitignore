@@ -1,0 +1,5 @@
+db.php
+.env
+*.log
+.DS_Store
+Thumbs.db
