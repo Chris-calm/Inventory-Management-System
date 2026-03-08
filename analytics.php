@@ -89,7 +89,23 @@ if (count($topCategoryLabels) === 0) {
                 <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
                 <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
                 <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <li class="nav-link"><a href="transactions.php"><i class='bx bx-transfer-alt icon'></i><span class="text nav-text">Stock In/Out</span></a></li>
+                <?php if (has_perm('movement.view') || has_perm('location.view')) { ?>
+                    <li class="nav-dropdown">
+                        <a href="#" class="dropdown-toggle">
+                            <i class='bx bx-transfer-alt icon'></i>
+                            <span class="text nav-text">Stock</span>
+                            <i class='bx bx-chevron-down dd-icon'></i>
+                        </a>
+                        <ul class="submenu">
+                            <?php if (has_perm('movement.view')) { ?>
+                                <li class="nav-link"><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
+                            <?php } ?>
+                            <?php if (has_perm('location.view')) { ?>
+                                <li class="nav-link"><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
+                            <?php } ?>
+                        </ul>
+                    </li>
+                <?php } ?>
             </ul>
         </div>
         <div class="bottom-content">

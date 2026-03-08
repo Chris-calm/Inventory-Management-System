@@ -16,9 +16,16 @@ $name = '';
 $description = '';
 $status = 'active';
 $notes = '';
+$parentId = '';
+$tag = '';
+$tagColor = '#4f46e5';
 
 $hasStatusColumn = false;
 $hasNotesColumn = false;
+$hasParentIdColumn = false;
+$hasTagColumn = false;
+$hasTagColorColumn = false;
+$hasArchivedAtColumn = false;
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'status'")) {
         $stmtCol->execute();
@@ -38,6 +45,42 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         }
         $stmtCol->close();
     }
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'parent_id'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasParentIdColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'tag'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasTagColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'tag_color'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasTagColorColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'archived_at'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasArchivedAtColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
 }
 
 if ($action === 'edit') {
@@ -52,6 +95,15 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
     if ($hasNotesColumn) {
         $selectCols .= ", notes";
     }
+    if ($hasParentIdColumn) {
+        $selectCols .= ", parent_id";
+    }
+    if ($hasTagColumn) {
+        $selectCols .= ", tag";
+    }
+    if ($hasTagColorColumn) {
+        $selectCols .= ", tag_color";
+    }
     $stmt = $conn->prepare("SELECT $selectCols FROM categories WHERE id = ? LIMIT 1");
     if ($stmt) {
         $stmt->bind_param('i', $id);
@@ -65,6 +117,15 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
             }
             if ($hasNotesColumn) {
                 $notes = (string)($row['notes'] ?? '');
+            }
+            if ($hasParentIdColumn) {
+                $parentId = $row['parent_id'] === null ? '' : (string)$row['parent_id'];
+            }
+            if ($hasTagColumn) {
+                $tag = (string)($row['tag'] ?? '');
+            }
+            if ($hasTagColorColumn) {
+                $tagColor = (string)($row['tag_color'] ?? '#4f46e5');
             }
         }
         $stmt->close();
@@ -97,6 +158,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
         if ($hasNotesColumn) {
             $notes = trim((string)($_POST['notes'] ?? ''));
         }
+        $parentVal = null;
+        if ($hasParentIdColumn) {
+            $parentId = trim((string)($_POST['parent_id'] ?? ''));
+            $parentVal = $parentId === '' ? null : (int)$parentId;
+            if ($editId > 0 && $parentVal !== null && $parentVal === $editId) {
+                $parentVal = null;
+                $parentId = '';
+            }
+        }
+        if ($hasTagColumn) {
+            $tag = trim((string)($_POST['tag'] ?? ''));
+            if ($tag === '') { $tag = ''; }
+        }
+        if ($hasTagColorColumn) {
+            $tagColor = trim((string)($_POST['tag_color'] ?? '#4f46e5'));
+            if (!preg_match('/^#[0-9a-fA-F]{6}$/', $tagColor)) {
+                $tagColor = '#4f46e5';
+            }
+        }
+
+        if ($hasParentIdColumn && $hasStatusColumn && $parentVal !== null) {
+            $stmtParent = $conn->prepare("SELECT status FROM categories WHERE id = ? LIMIT 1");
+            if ($stmtParent) {
+                $stmtParent->bind_param('i', $parentVal);
+                $stmtParent->execute();
+                $resParent = $stmtParent->get_result();
+                if ($resParent && ($p = $resParent->fetch_assoc())) {
+                    $ps = (string)($p['status'] ?? 'active');
+                    if (in_array($ps, ['active', 'inactive'], true)) {
+                        $status = $ps;
+                    }
+                }
+                $stmtParent->close();
+            }
+        }
 
         if ($name === '') {
             $flash = 'Category name is required.';
@@ -122,23 +218,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         if ($hasNotesColumn) {
                             $setParts .= ", notes = ?";
                         }
+                        if ($hasParentIdColumn) {
+                            $setParts .= ", parent_id = ?";
+                        }
+                        if ($hasTagColumn) {
+                            $setParts .= ", tag = ?";
+                        }
+                        if ($hasTagColorColumn) {
+                            $setParts .= ", tag_color = ?";
+                        }
                         $stmt2 = $conn->prepare("UPDATE categories SET $setParts WHERE id = ?");
                         if ($stmt2) {
-                            if ($hasStatusColumn && $hasNotesColumn) {
-                                $stmt2->bind_param('ssssi', $name, $description, $status, $notes, $editId);
-                            } elseif ($hasStatusColumn) {
-                                $stmt2->bind_param('sssi', $name, $description, $status, $editId);
-                            } elseif ($hasNotesColumn) {
-                                $stmt2->bind_param('sssi', $name, $description, $notes, $editId);
-                            } else {
-                                $stmt2->bind_param('ssi', $name, $description, $editId);
+                            $bindTypes = '';
+                            $bindParams = [];
+                            $bindTypes .= 'ss';
+                            $bindParams[] = $name;
+                            $bindParams[] = $description;
+                            if ($hasStatusColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $status;
                             }
-                            $ok = $stmt2->execute();
-                            $stmt2->close();
-                            if ($ok) {
-                                audit_log($conn, 'category.edit', 'Edited category_id=' . (string)$editId, $editId);
-                                header('Location: category.php?msg=updated');
-                                exit();
+                            if ($hasNotesColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $notes;
+                            }
+                            if ($hasParentIdColumn) {
+                                $bindTypes .= 'i';
+                                $bindParams[] = $parentVal === null ? 0 : (int)$parentVal;
+                            }
+                            if ($hasTagColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $tag;
+                            }
+                            if ($hasTagColorColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $tagColor;
+                            }
+                            $bindTypes .= 'i';
+                            $bindParams[] = $editId;
+
+                            if ($hasParentIdColumn && $parentVal === null) {
+                                $sqlNull = str_replace('parent_id = ?', 'parent_id = NULL', "UPDATE categories SET $setParts WHERE id = ?");
+                                $sqlNull = str_replace(', parent_id = NULL', ', parent_id = NULL', $sqlNull);
+                                $stmt2->close();
+                                $stmt2 = $conn->prepare($sqlNull);
+                                if ($stmt2) {
+                                    $bindTypes2 = $bindTypes;
+                                    $bindParams2 = $bindParams;
+                                    $idx = 0;
+                                    $newTypes = '';
+                                    $newParams = [];
+                                    for ($i = 0; $i < strlen($bindTypes2); $i++) {
+                                        $t = $bindTypes2[$i];
+                                        $val = $bindParams2[$idx];
+                                        $idx++;
+                                        if ($t === 'i' && $hasParentIdColumn && $i > 1) {
+                                            continue;
+                                        }
+                                        $newTypes .= $t;
+                                        $newParams[] = $val;
+                                    }
+                                    $stmt2->bind_param($newTypes, ...$newParams);
+                                    $ok = $stmt2->execute();
+                                    $stmt2->close();
+                                    if ($ok) {
+                                        audit_log($conn, 'category.edit', 'Edited category_id=' . (string)$editId, $editId);
+                                        header('Location: category.php?msg=updated');
+                                        exit();
+                                    }
+                                }
+                                $flash = 'Failed to update category.';
+                                $flashType = 'error';
+                            } else {
+                                $stmt2->bind_param($bindTypes, ...$bindParams);
+                                $ok = $stmt2->execute();
+                                $stmt2->close();
+                                if ($ok) {
+                                    audit_log($conn, 'category.edit', 'Edited category_id=' . (string)$editId, $editId);
+                                    header('Location: category.php?msg=updated');
+                                    exit();
+                                }
                             }
                         }
                         $flash = 'Failed to update category.';
@@ -154,24 +313,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                             $cols .= ", notes";
                             $vals .= ", ?";
                         }
+                        if ($hasParentIdColumn) {
+                            $cols .= ", parent_id";
+                            $vals .= ", ?";
+                        }
+                        if ($hasTagColumn) {
+                            $cols .= ", tag";
+                            $vals .= ", ?";
+                        }
+                        if ($hasTagColorColumn) {
+                            $cols .= ", tag_color";
+                            $vals .= ", ?";
+                        }
                         $stmt2 = $conn->prepare("INSERT INTO categories ($cols) VALUES ($vals)");
                         if ($stmt2) {
-                            if ($hasStatusColumn && $hasNotesColumn) {
-                                $stmt2->bind_param('ssss', $name, $description, $status, $notes);
-                            } elseif ($hasStatusColumn) {
-                                $stmt2->bind_param('sss', $name, $description, $status);
-                            } elseif ($hasNotesColumn) {
-                                $stmt2->bind_param('sss', $name, $description, $notes);
-                            } else {
-                                $stmt2->bind_param('ss', $name, $description);
+                            $bindTypes = 'ss';
+                            $bindParams = [$name, $description];
+                            if ($hasStatusColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $status;
                             }
-                            $ok = $stmt2->execute();
-                            $newId = (int)$conn->insert_id;
-                            $stmt2->close();
-                            if ($ok) {
-                                audit_log($conn, 'category.create', 'Created category_id=' . (string)$newId . ';name=' . $name, $newId);
-                                header('Location: category.php?msg=created');
-                                exit();
+                            if ($hasNotesColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $notes;
+                            }
+                            if ($hasParentIdColumn) {
+                                $bindTypes .= 'i';
+                                $bindParams[] = $parentVal === null ? 0 : (int)$parentVal;
+                            }
+                            if ($hasTagColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $tag;
+                            }
+                            if ($hasTagColorColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $tagColor;
+                            }
+
+                            if ($hasParentIdColumn && $parentVal === null) {
+                                $stmt2->close();
+                                $sqlNull = str_replace('parent_id', 'parent_id', "INSERT INTO categories ($cols) VALUES ($vals)");
+                                $sqlNull = str_replace(', parent_id', ', parent_id', $sqlNull);
+                                $sqlNull = str_replace(', ?', ', NULL', $sqlNull);
+                                $stmt2 = $conn->prepare($sqlNull);
+                                if ($stmt2) {
+                                    $newTypes = '';
+                                    $newParams = [];
+                                    for ($i = 0, $j = 0; $i < strlen($bindTypes); $i++, $j++) {
+                                        if ($hasParentIdColumn && $bindTypes[$i] === 'i') {
+                                            continue;
+                                        }
+                                        $newTypes .= $bindTypes[$i];
+                                        $newParams[] = $bindParams[$j];
+                                    }
+                                    $stmt2->bind_param($newTypes, ...$newParams);
+                                    $ok = $stmt2->execute();
+                                    $newId = (int)$conn->insert_id;
+                                    $stmt2->close();
+                                    if ($ok) {
+                                        audit_log($conn, 'category.create', 'Created category_id=' . (string)$newId . ';name=' . $name, $newId);
+                                        header('Location: category.php?msg=created');
+                                        exit();
+                                    }
+                                }
+                                $flash = 'Failed to create category.';
+                                $flashType = 'error';
+                            } else {
+                                $stmt2->bind_param($bindTypes, ...$bindParams);
+                                $ok = $stmt2->execute();
+                                $newId = (int)$conn->insert_id;
+                                $stmt2->close();
+                                if ($ok) {
+                                    audit_log($conn, 'category.create', 'Created category_id=' . (string)$newId . ';name=' . $name, $newId);
+                                    header('Location: category.php?msg=created');
+                                    exit();
+                                }
                             }
                         }
                         $flash = 'Failed to create category.';
@@ -241,12 +457,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                     $ok = $stmt->execute();
                     $stmt->close();
                     if ($ok) {
+                        if ($hasParentIdColumn) {
+                            $stmtChild = $conn->prepare("UPDATE categories SET status = ? WHERE parent_id = ?");
+                            if ($stmtChild) {
+                                $stmtChild->bind_param('si', $newStatus, $toggleId);
+                                $stmtChild->execute();
+                                $stmtChild->close();
+                            }
+                        }
                         audit_log($conn, $newStatus === 'active' ? 'category.activate' : 'category.deactivate', 'category_id=' . (string)$toggleId, $toggleId);
                         header('Location: category.php?msg=status');
                         exit();
                     }
                 }
                 $flash = 'Failed to update status.';
+                $flashType = 'error';
+            }
+        }
+    }
+
+    if ($postAction === 'archive') {
+        require_perm('category.edit');
+        if (!$hasArchivedAtColumn) {
+            $flash = 'Archive feature is not enabled yet. Please import category_schema_v2.sql.';
+            $flashType = 'error';
+        } else {
+            $archiveId = (int)($_POST['id'] ?? 0);
+            if ($archiveId > 0) {
+                $stmt = $conn->prepare("UPDATE categories SET archived_at = NOW() WHERE id = ?");
+                if ($stmt) {
+                    $stmt->bind_param('i', $archiveId);
+                    $ok = $stmt->execute();
+                    $stmt->close();
+                    if ($ok) {
+                        audit_log($conn, 'category.archive', 'category_id=' . (string)$archiveId, $archiveId);
+                        header('Location: category.php?msg=archived');
+                        exit();
+                    }
+                }
+                $flash = 'Failed to archive category.';
+                $flashType = 'error';
+            }
+        }
+    }
+
+    if ($postAction === 'restore') {
+        require_perm('category.edit');
+        if (!$hasArchivedAtColumn) {
+            $flash = 'Archive feature is not enabled yet. Please import category_schema_v2.sql.';
+            $flashType = 'error';
+        } else {
+            $restoreId = (int)($_POST['id'] ?? 0);
+            if ($restoreId > 0) {
+                $stmt = $conn->prepare("UPDATE categories SET archived_at = NULL WHERE id = ?");
+                if ($stmt) {
+                    $stmt->bind_param('i', $restoreId);
+                    $ok = $stmt->execute();
+                    $stmt->close();
+                    if ($ok) {
+                        audit_log($conn, 'category.restore', 'category_id=' . (string)$restoreId, $restoreId);
+                        header('Location: category.php?msg=restored');
+                        exit();
+                    }
+                }
+                $flash = 'Failed to restore category.';
                 $flashType = 'error';
             }
         }
@@ -258,11 +532,14 @@ if ($msg === 'created') { $flash = 'Category created.'; $flashType = 'success'; 
 if ($msg === 'updated') { $flash = 'Category updated.'; $flashType = 'success'; }
 if ($msg === 'deleted') { $flash = 'Category deleted.'; $flashType = 'success'; }
 if ($msg === 'status') { $flash = 'Category status updated.'; $flashType = 'success'; }
+if ($msg === 'archived') { $flash = 'Category archived.'; $flashType = 'success'; }
+if ($msg === 'restored') { $flash = 'Category restored.'; $flashType = 'success'; }
 
 $rows = [];
 
 $q = trim((string)($_GET['q'] ?? ''));
 $statusFilter = (string)($_GET['status'] ?? 'all');
+$showArchived = (string)($_GET['show_archived'] ?? '0') === '1';
 $sort = (string)($_GET['sort'] ?? 'name_asc');
 $page = (int)($_GET['page'] ?? 1);
 $perPage = 10;
@@ -297,6 +574,10 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         $types .= 's';
     }
 
+    if ($hasArchivedAtColumn && !$showArchived) {
+        $where[] = 'c.archived_at IS NULL';
+    }
+
     $whereSql = count($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
 
     $selectColsList = 'c.id, c.name, c.description, c.created_at';
@@ -309,6 +590,31 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         $selectColsList .= ', c.notes';
     } else {
         $selectColsList .= ', NULL AS notes';
+    }
+    if ($hasParentIdColumn) {
+        $selectColsList .= ', c.parent_id';
+    } else {
+        $selectColsList .= ', NULL AS parent_id';
+    }
+    if ($hasParentIdColumn) {
+        $selectColsList .= ', pc.name AS parent_name';
+    } else {
+        $selectColsList .= ', NULL AS parent_name';
+    }
+    if ($hasTagColumn) {
+        $selectColsList .= ', c.tag';
+    } else {
+        $selectColsList .= ', NULL AS tag';
+    }
+    if ($hasTagColorColumn) {
+        $selectColsList .= ', c.tag_color';
+    } else {
+        $selectColsList .= ', NULL AS tag_color';
+    }
+    if ($hasArchivedAtColumn) {
+        $selectColsList .= ', c.archived_at';
+    } else {
+        $selectColsList .= ', NULL AS archived_at';
     }
 
     $sqlCount = "SELECT COUNT(*) AS c FROM categories c $whereSql";
@@ -329,9 +635,14 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     if ($page > $totalPages) { $page = $totalPages; }
     $offset = ($page - 1) * $perPage;
 
+    $fromSql = 'FROM categories c';
+    if ($hasParentIdColumn) {
+        $fromSql .= ' LEFT JOIN categories pc ON pc.id = c.parent_id';
+    }
+    $fromSql .= ' LEFT JOIN products p ON p.category_id = c.id';
+
     $sql = "SELECT $selectColsList, COUNT(p.id) AS product_count
-            FROM categories c
-            LEFT JOIN products p ON p.category_id = c.id
+            $fromSql
             $whereSql
             GROUP BY c.id
             ORDER BY $sortSql
@@ -393,6 +704,9 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
                 <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
                 <li class="nav-link"><a href="transactions.php"><i class='bx bx-transfer-alt icon'></i><span class="text nav-text">Stock In/Out</span></a></li>
+                <?php if (has_perm('location.view')) { ?>
+                    <li class="nav-link"><a href="locations.php"><i class='bx bx-map-pin icon'></i><span class="text nav-text">Locations</span></a></li>
+                <?php } ?>
             </ul>
         </div>
         <div class="bottom-content">
@@ -444,6 +758,45 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <label class="label">Description</label>
                         <input class="input" type="text" name="description" value="<?php echo htmlspecialchars($description, ENT_QUOTES, 'UTF-8'); ?>">
                     </div>
+
+                    <?php if ($hasParentIdColumn) { ?>
+                        <?php
+                            $parentOptions = [];
+                            if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+                                $sqlParents = $hasArchivedAtColumn ? "SELECT id, name FROM categories WHERE (archived_at IS NULL) ORDER BY name ASC" : "SELECT id, name FROM categories ORDER BY name ASC";
+                                if ($resP = $conn->query($sqlParents)) {
+                                    while ($pr = $resP->fetch_assoc()) {
+                                        if ($action === 'edit' && (int)$id === (int)($pr['id'] ?? 0)) { continue; }
+                                        $parentOptions[] = $pr;
+                                    }
+                                    $resP->free();
+                                }
+                            }
+                        ?>
+                        <div class="form-row">
+                            <label class="label">Parent Category</label>
+                            <select class="input" name="parent_id">
+                                <option value="" <?php echo $parentId === '' ? 'selected' : ''; ?>>None</option>
+                                <?php foreach ($parentOptions as $po) { ?>
+                                    <option value="<?php echo (int)($po['id'] ?? 0); ?>" <?php echo (string)($po['id'] ?? '') === (string)$parentId ? 'selected' : ''; ?>><?php echo htmlspecialchars((string)($po['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php } ?>
+                            </select>
+                        </div>
+                    <?php } ?>
+
+                    <?php if ($hasTagColumn) { ?>
+                        <div class="form-row">
+                            <label class="label">Tag</label>
+                            <input class="input" type="text" name="tag" value="<?php echo htmlspecialchars($tag, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
+                        </div>
+                    <?php } ?>
+
+                    <?php if ($hasTagColorColumn) { ?>
+                        <div class="form-row">
+                            <label class="label">Tag Color</label>
+                            <input class="input" type="color" name="tag_color" value="<?php echo htmlspecialchars($tagColor, ENT_QUOTES, 'UTF-8'); ?>">
+                        </div>
+                    <?php } ?>
 
                     <?php if ($hasStatusColumn) { ?>
                         <div class="form-row">
@@ -497,8 +850,21 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <option value="newest" <?php echo $sort === 'newest' ? 'selected' : ''; ?>>Newest</option>
                         <option value="products_desc" <?php echo $sort === 'products_desc' ? 'selected' : ''; ?>>Most products</option>
                     </select>
+                    <?php if ($hasArchivedAtColumn) { ?>
+                        <input type="hidden" name="show_archived" value="<?php echo $showArchived ? '1' : '0'; ?>">
+                    <?php } ?>
                     <button class="btn" type="submit">Filter</button>
                 </form>
+
+                <?php if ($hasArchivedAtColumn) { ?>
+                    <div class="toolbar" style="grid-template-columns: 1fr auto; align-items: center; margin-top: 10px;">
+                        <div class="muted">Archived categories are hidden by default.</div>
+                        <?php
+                            $toggleParams = ['q' => $q, 'status' => $statusFilter, 'sort' => $sort, 'page' => $page, 'show_archived' => $showArchived ? '0' : '1'];
+                        ?>
+                        <a class="btn" href="category.php?<?php echo htmlspecialchars(http_build_query($toggleParams), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $showArchived ? 'Hide Archived' : 'Show Archived'; ?></a>
+                    </div>
+                <?php } ?>
 
                 <div class="table-wrap">
                     <table class="table">
@@ -506,6 +872,8 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <tr>
                             <th>Name</th>
                             <th>Description</th>
+                            <th>Parent</th>
+                            <th>Tag</th>
                             <th>Status</th>
                             <th>Notes</th>
                             <th>Products</th>
@@ -515,12 +883,30 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </thead>
                         <tbody>
                         <?php if (count($rows) === 0) { ?>
-                            <tr><td colspan="7" class="muted">No categories found.</td></tr>
+                            <tr><td colspan="9" class="muted">No categories found.</td></tr>
                         <?php } else { ?>
                             <?php foreach ($rows as $r) { ?>
                                 <tr>
-                                    <td><?php echo htmlspecialchars((string)$r['name'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars((string)$r['name'], ENT_QUOTES, 'UTF-8'); ?>
+                                        <?php if ($hasArchivedAtColumn && !empty($r['archived_at'])) { ?>
+                                            <span class="muted">(archived)</span>
+                                        <?php } ?>
+                                    </td>
                                     <td><?php echo htmlspecialchars((string)($r['description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                                    <td>
+                                        <?php
+                                            $pn = (string)($r['parent_name'] ?? '');
+                                            echo $pn !== '' ? htmlspecialchars($pn, ENT_QUOTES, 'UTF-8') : '—';
+                                        ?>
+                                    </td>
+                                    <td>
+                                        <?php if (!empty($r['tag'])) { ?>
+                                            <span class="meta-pill" style="background: <?php echo htmlspecialchars((string)($r['tag_color'] ?? '#4f46e5'), ENT_QUOTES, 'UTF-8'); ?>; border: 0; color: #fff;"><?php echo htmlspecialchars((string)$r['tag'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                        <?php } else { ?>
+                                            <span class="muted">—</span>
+                                        <?php } ?>
+                                    </td>
                                     <td><?php echo htmlspecialchars((string)($r['status'] ?? 'active'), ENT_QUOTES, 'UTF-8'); ?></td>
                                     <td><?php echo htmlspecialchars((string)($r['notes'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                                     <td><?php echo (int)($r['product_count'] ?? 0); ?></td>
@@ -529,6 +915,23 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                                         <div class="row-actions">
                                             <?php if (has_perm('category.edit')) { ?>
                                                 <a class="btn" href="category.php?action=edit&id=<?php echo (int)$r['id']; ?>">Edit</a>
+                                            <?php } ?>
+                                            <?php if ($hasArchivedAtColumn && has_perm('category.edit')) { ?>
+                                                <?php if (!empty($r['archived_at'])) { ?>
+                                                    <form method="post" class="inline">
+                                                        <input type="hidden" name="action" value="restore">
+                                                        <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <button class="btn" type="submit">Restore</button>
+                                                    </form>
+                                                <?php } else { ?>
+                                                    <form method="post" class="inline" onsubmit="return confirm('Archive this category?');">
+                                                        <input type="hidden" name="action" value="archive">
+                                                        <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <button class="btn" type="submit">Archive</button>
+                                                    </form>
+                                                <?php } ?>
                                             <?php } ?>
                                             <?php if ($hasStatusColumn && has_perm('category.edit')) { ?>
                                                 <form method="post" class="inline">
@@ -560,6 +963,9 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <?php
                         $totalPages = (int)max(1, (int)ceil($totalRows / $perPage));
                         $baseParams = ['q' => $q, 'status' => $statusFilter, 'sort' => $sort];
+                        if ($hasArchivedAtColumn) {
+                            $baseParams['show_archived'] = $showArchived ? '1' : '0';
+                        }
                     ?>
                     <div class="toolbar" style="grid-template-columns: 1fr auto auto; align-items: center;">
                         <div class="muted">Page <?php echo (int)$page; ?> of <?php echo (int)$totalPages; ?> — <?php echo (int)$totalRows; ?> total</div>

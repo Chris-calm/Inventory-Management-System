@@ -7,7 +7,7 @@
 }
 :root { 
     --body-color: #E4E9F7;
-    --sidebar-color: purple;
+    --sidebar-color: #1e40af;
     --primary-color: #695CFE;
     --primary-color-light: #F6F5FF;
     --toogle-color: #DDD;
@@ -27,6 +27,7 @@ body {
     height: 100vh;
     background: var(--body-color);
     transition: var(--tran-05);
+    font-size: 16px;
 }
 body.dark,
 html.dark {
@@ -43,7 +44,7 @@ html.dark {
     --shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
 }
 .sidebar .text {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 500;
     color: var(--text-color);
     transition: var(--tran-03);
@@ -66,6 +67,11 @@ html.dark {
     background: var(--sidebar-color);
     transition: var(--tran-05);
     z-index: 100;
+}
+
+body:not(.dark) .sidebar,
+html:not(.dark) .sidebar {
+    background: #1e40af !important;
 }
 .sidebar.close {
     width: 88px;
@@ -92,6 +98,27 @@ html.dark {
 .sidebar li .icon, .sidebar li .text {
     color: var(--text-color);
     transition: var(--tran-02);
+}
+body:not(.dark) .sidebar li .icon,
+body:not(.dark) .sidebar li .text,
+html:not(.dark) .sidebar li .icon,
+html:not(.dark) .sidebar li .text,
+body:not(.dark) .sidebar header .text,
+html:not(.dark) .sidebar header .text {
+    color: rgba(255, 255, 255, 0.92);
+}
+body:not(.dark) .sidebar .menu-bar .mode,
+html:not(.dark) .sidebar .menu-bar .mode,
+body:not(.dark) .sidebar .menu-bar .mode .mode-text,
+html:not(.dark) .sidebar .menu-bar .mode .mode-text {
+    color: rgba(255, 255, 255, 0.92);
+}
+
+body:not(.dark) .sidebar .menu-bar .mode,
+html:not(.dark) .sidebar .menu-bar .mode,
+body:not(.dark) .sidebar .menu-bar .mode .toggle-switch,
+html:not(.dark) .sidebar .menu-bar .mode .toggle-switch {
+    background: rgba(255, 255, 255, 0.12);
 }
 .sidebar header {
     position: relative;
@@ -151,7 +178,7 @@ html.dark .sidebar header .toggle {
     outline: none;
     border: none;
     border-radius: 6px;
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 500;
     background: var(--primary-color-light);
     transition: var(--tran-05); 
@@ -170,7 +197,7 @@ html.dark .sidebar header .toggle {
 }
 .sidebar li a:hover .icon,
 .sidebar li a:hover .text {
-    color: var(--sidebar-color);
+    color: #fff;
 }
 body.dark .sidebar li a:hover .icon,
 body.dark .sidebar li a:hover .text,
@@ -287,7 +314,7 @@ html.dark .switch::before {
 
 .page-subtitle {
     margin-top: 4px;
-    font-size: 13px;
+    font-size: 15px;
     color: color-mix(in srgb, var(--text-color) 70%, transparent);
 }
 
@@ -302,7 +329,7 @@ html.dark .switch::before {
     border: 1px solid var(--border);
     border-radius: 999px;
     padding: 8px 12px;
-    font-size: 12px;
+    font-size: 14px;
     color: var(--text-color);
     box-shadow: var(--shadow);
 }
@@ -385,7 +412,7 @@ html.dark .switch::before {
 }
 
 .panel-title {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     color: var(--text-color);
 }
@@ -409,7 +436,7 @@ html.dark .switch::before {
     justify-content: space-between;
     gap: 10px;
     padding: 8px 0;
-    font-size: 12px;
+    font-size: 14px;
     color: color-mix(in srgb, var(--text-color) 85%, transparent);
 }
 
@@ -500,13 +527,13 @@ html.dark .switch::before {
 .table td {
     text-align: left;
     padding: 10px 8px;
-    font-size: 12px;
+    font-size: 14px;
     border-bottom: 1px solid var(--border);
     color: var(--text-color);
 }
 
 .table th {
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: color-mix(in srgb, var(--text-color) 70%, transparent);
@@ -535,7 +562,7 @@ html.dark .switch::before {
 }
 
 .label {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-color);
 }
@@ -575,7 +602,7 @@ html.dark .switch::before {
     color: var(--text-color);
     text-decoration: none;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     transition: var(--tran-03);
 }
@@ -609,7 +636,7 @@ html.dark .switch::before {
     border-radius: 12px;
     border: 1px solid var(--border);
     margin-bottom: 12px;
-    font-size: 12px;
+    font-size: 14px;
 }
 
 .alert.success {
@@ -635,6 +662,61 @@ html.dark .switch::before {
 
 .inline {
     display: inline;
+}
+
+.nav-dropdown {
+    display: block;
+}
+
+.nav-dropdown .dropdown-toggle {
+    text-decoration: none;
+    height: 50px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+    transition: var(--tran-04);
+    cursor: pointer;
+}
+
+.nav-dropdown .dd-icon {
+    margin-left: auto;
+    margin-right: 12px;
+    font-size: 18px;
+    transition: var(--tran-03);
+}
+
+.nav-dropdown.open .dd-icon {
+    transform: rotate(180deg);
+}
+
+.nav-dropdown .submenu {
+    display: none;
+    list-style: none;
+    margin: 6px 0 0 0;
+    padding: 6px 0 6px 10px;
+}
+
+.nav-dropdown.open .submenu {
+    display: block;
+}
+
+.nav-dropdown .submenu li {
+    height: auto;
+    margin-top: 6px;
+}
+
+.nav-dropdown .submenu a {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+    text-decoration: none;
+    padding-left: 10px;
+}
+
+.sidebar.close .nav-dropdown.open .submenu {
+    display: none;
 }
 
 @media (max-width: 1100px) {

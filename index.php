@@ -95,6 +95,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     'product.delete' => true,
                                     'movement.view' => true,
                                     'movement.create' => true,
+                                    'movement.approve' => true,
                                 ];
                             } else {
                                 $_SESSION['perms'] = [

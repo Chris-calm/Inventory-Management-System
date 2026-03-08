@@ -69,3 +69,24 @@ if (modeSwitch && body) {
     } catch (e) {}
   });
 }
+
+// Sidebar dropdowns (sub-modules)
+try {
+  const dropdownToggles = document.querySelectorAll(".nav-dropdown .dropdown-toggle");
+  dropdownToggles.forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const li = el.closest(".nav-dropdown");
+      if (!li) return;
+      if (sidebar && sidebar.classList.contains("close")) {
+        sidebar.classList.remove("close");
+        try {
+          localStorage.setItem(STORAGE_KEYS.sidebar, "open");
+        } catch (err) {}
+      }
+      li.classList.toggle("open");
+    });
+  });
+} catch (e) {
+  // ignore
+}

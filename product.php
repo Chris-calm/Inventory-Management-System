@@ -19,6 +19,7 @@ $unitCost = '0.00';
 $unitPrice = '0.00';
 $reorderLevel = '5';
 $status = 'active';
+$imagePath = '';
 
 $categories = [];
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
@@ -33,9 +34,30 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         $stmtCol->close();
     }
 
-    $catSql = $hasCatStatus
-        ? "SELECT id, name FROM categories WHERE status = 'active' ORDER BY name ASC"
-        : "SELECT id, name FROM categories ORDER BY name ASC";
+    $hasCatArchived = false;
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'archived_at'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasCatArchived = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+
+    $whereParts = [];
+    if ($hasCatStatus) {
+        $whereParts[] = "status = 'active'";
+    }
+    if ($hasCatArchived) {
+        $whereParts[] = "archived_at IS NULL";
+    }
+
+    $catSql = "SELECT id, name FROM categories";
+    if (count($whereParts) > 0) {
+        $catSql .= ' WHERE ' . implode(' AND ', $whereParts);
+    }
+    $catSql .= ' ORDER BY name ASC';
 
     if ($res = $conn->query($catSql)) {
         while ($r = $res->fetch_assoc()) {
@@ -45,12 +67,39 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     }
 }
 
+$hasProdImagePath = false;
+$hasProdArchivedAt = false;
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products' AND COLUMN_NAME = 'image_path'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasProdImagePath = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'products' AND COLUMN_NAME = 'archived_at'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasProdArchivedAt = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+}
+
 if ($action === 'edit') {
     require_perm('product.edit');
 }
 
 if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
-    $stmt = $conn->prepare("SELECT sku, name, category_id, unit_cost, unit_price, reorder_level, status FROM products WHERE id = ? LIMIT 1");
+    $selectCols = 'sku, name, category_id, unit_cost, unit_price, reorder_level, status';
+    if ($hasProdImagePath) {
+        $selectCols .= ', image_path';
+    }
+    $stmt = $conn->prepare("SELECT $selectCols FROM products WHERE id = ? LIMIT 1");
     if ($stmt) {
         $stmt->bind_param('i', $id);
         $stmt->execute();
@@ -63,6 +112,9 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
             $unitPrice = (string)($row['unit_price'] ?? '0.00');
             $reorderLevel = (string)($row['reorder_level'] ?? '5');
             $status = (string)($row['status'] ?? 'active');
+            if ($hasProdImagePath) {
+                $imagePath = (string)($row['image_path'] ?? '');
+            }
         }
         $stmt->close();
     }
@@ -91,12 +143,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
         $reorderLevel = trim((string)($_POST['reorder_level'] ?? '5'));
         $status = (string)($_POST['status'] ?? 'active');
 
+        $uploadedImagePath = null;
+        if ($hasProdImagePath && isset($_FILES['image']) && is_array($_FILES['image'])) {
+            $err = (int)($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($err !== UPLOAD_ERR_NO_FILE) {
+                if ($err !== UPLOAD_ERR_OK) {
+                    $flash = 'Image upload failed.';
+                    $flashType = 'error';
+                } else {
+                    $tmp = (string)($_FILES['image']['tmp_name'] ?? '');
+                    $size = (int)($_FILES['image']['size'] ?? 0);
+                    $orig = (string)($_FILES['image']['name'] ?? '');
+                    $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+                    $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+                    if (!in_array($ext, $allowed, true)) {
+                        $flash = 'Invalid image type. Allowed: JPG, PNG, WEBP.';
+                        $flashType = 'error';
+                    } elseif ($size <= 0 || $size > 5 * 1024 * 1024) {
+                        $flash = 'Image must be under 5MB.';
+                        $flashType = 'error';
+                    } else {
+                        $dir = __DIR__ . '/uploads/products';
+                        if (!is_dir($dir)) {
+                            @mkdir($dir, 0755, true);
+                        }
+                        $filename = 'p_' . bin2hex(random_bytes(8)) . '.' . $ext;
+                        $dest = $dir . '/' . $filename;
+                        if (!@move_uploaded_file($tmp, $dest)) {
+                            $flash = 'Failed to save uploaded image.';
+                            $flashType = 'error';
+                        } else {
+                            $uploadedImagePath = 'uploads/products/' . $filename;
+                        }
+                    }
+                }
+            }
+        }
+
         $catVal = $categoryId === '' ? null : (int)$categoryId;
         $costVal = is_numeric($unitCost) ? (float)$unitCost : 0.0;
         $priceVal = is_numeric($unitPrice) ? (float)$unitPrice : 0.0;
         $reorderVal = is_numeric($reorderLevel) ? (int)$reorderLevel : 5;
 
-        if ($sku === '' || $name === '') {
+        if ($flashType === 'error') {
+            // keep existing flash
+        } elseif ($sku === '' || $name === '') {
             $flash = 'SKU and product name are required.';
             $flashType = 'error';
         } elseif (!in_array($status, ['active', 'inactive'], true)) {
@@ -120,17 +211,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                 } else {
                     if ($editId > 0) {
                         if ($catVal === null) {
-                            $stmt2 = $conn->prepare("UPDATE products SET sku = ?, name = ?, category_id = NULL, unit_cost = ?, unit_price = ?, reorder_level = ?, status = ? WHERE id = ?");
+                            $setParts = "sku = ?, name = ?, category_id = NULL, unit_cost = ?, unit_price = ?, reorder_level = ?, status = ?";
+                            if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                $setParts .= ", image_path = ?";
+                            }
+                            $stmt2 = $conn->prepare("UPDATE products SET $setParts WHERE id = ?");
                             if ($stmt2) {
-                                $stmt2->bind_param('ssddisi', $sku, $name, $costVal, $priceVal, $reorderVal, $status, $editId);
+                                if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                    $stmt2->bind_param('ssddiss' . 'i', $sku, $name, $costVal, $priceVal, $reorderVal, $status, $uploadedImagePath, $editId);
+                                } else {
+                                    $stmt2->bind_param('ssddisi', $sku, $name, $costVal, $priceVal, $reorderVal, $status, $editId);
+                                }
                                 $ok = $stmt2->execute();
                                 $stmt2->close();
                                 if ($ok) { header('Location: product.php?msg=updated'); exit(); }
                             }
                         } else {
-                            $stmt2 = $conn->prepare("UPDATE products SET sku = ?, name = ?, category_id = ?, unit_cost = ?, unit_price = ?, reorder_level = ?, status = ? WHERE id = ?");
+                            $setParts = "sku = ?, name = ?, category_id = ?, unit_cost = ?, unit_price = ?, reorder_level = ?, status = ?";
+                            if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                $setParts .= ", image_path = ?";
+                            }
+                            $stmt2 = $conn->prepare("UPDATE products SET $setParts WHERE id = ?");
                             if ($stmt2) {
-                                $stmt2->bind_param('ssiddisi', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status, $editId);
+                                if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                    $stmt2->bind_param('ssiddiss' . 'i', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status, $uploadedImagePath, $editId);
+                                } else {
+                                    $stmt2->bind_param('ssiddisi', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status, $editId);
+                                }
                                 $ok = $stmt2->execute();
                                 $stmt2->close();
                                 if ($ok) { header('Location: product.php?msg=updated'); exit(); }
@@ -140,17 +247,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         $flashType = 'error';
                     } else {
                         if ($catVal === null) {
-                            $stmt2 = $conn->prepare("INSERT INTO products (sku, name, category_id, unit_cost, unit_price, stock_qty, reorder_level, status) VALUES (?, ?, NULL, ?, ?, 0, ?, ?)");
+                            $cols = "sku, name, category_id, unit_cost, unit_price, stock_qty, reorder_level, status";
+                            $vals = "?, ?, NULL, ?, ?, 0, ?, ?";
+                            $bindTypes = 'ssddis';
+                            $bindParams = [$sku, $name, $costVal, $priceVal, $reorderVal, $status];
+                            if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                $cols .= ", image_path";
+                                $vals .= ", ?";
+                                $bindTypes .= 's';
+                                $bindParams[] = $uploadedImagePath;
+                            }
+                            $stmt2 = $conn->prepare("INSERT INTO products ($cols) VALUES ($vals)");
                             if ($stmt2) {
-                                $stmt2->bind_param('ssddis', $sku, $name, $costVal, $priceVal, $reorderVal, $status);
+                                $stmt2->bind_param($bindTypes, ...$bindParams);
                                 $ok = $stmt2->execute();
                                 $stmt2->close();
                                 if ($ok) { header('Location: product.php?msg=created'); exit(); }
                             }
                         } else {
-                            $stmt2 = $conn->prepare("INSERT INTO products (sku, name, category_id, unit_cost, unit_price, stock_qty, reorder_level, status) VALUES (?, ?, ?, ?, ?, 0, ?, ?)");
+                            $cols = "sku, name, category_id, unit_cost, unit_price, stock_qty, reorder_level, status";
+                            $vals = "?, ?, ?, ?, ?, 0, ?, ?";
+                            $bindTypes = 'ssiddis';
+                            $bindParams = [$sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status];
+                            if ($hasProdImagePath && $uploadedImagePath !== null) {
+                                $cols .= ", image_path";
+                                $vals .= ", ?";
+                                $bindTypes .= 's';
+                                $bindParams[] = $uploadedImagePath;
+                            }
+                            $stmt2 = $conn->prepare("INSERT INTO products ($cols) VALUES ($vals)");
                             if ($stmt2) {
-                                $stmt2->bind_param('ssiddis', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status);
+                                $stmt2->bind_param($bindTypes, ...$bindParams);
                                 $ok = $stmt2->execute();
                                 $stmt2->close();
                                 if ($ok) { header('Location: product.php?msg=created'); exit(); }
@@ -182,15 +309,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
             $flashType = 'error';
         }
     }
+
+    if ($postAction === 'archive') {
+        require_perm('product.edit');
+        if (!$hasProdArchivedAt) {
+            $flash = 'Archive feature is not enabled yet. Please import product_schema_v2.sql.';
+            $flashType = 'error';
+        } else {
+            $archiveId = (int)($_POST['id'] ?? 0);
+            if ($archiveId > 0) {
+                $stmt = $conn->prepare("UPDATE products SET archived_at = NOW() WHERE id = ?");
+                if ($stmt) {
+                    $stmt->bind_param('i', $archiveId);
+                    $ok = $stmt->execute();
+                    $stmt->close();
+                    if ($ok) { header('Location: product.php?msg=archived'); exit(); }
+                }
+                $flash = 'Failed to archive product.';
+                $flashType = 'error';
+            }
+        }
+    }
+
+    if ($postAction === 'restore') {
+        require_perm('product.edit');
+        if (!$hasProdArchivedAt) {
+            $flash = 'Archive feature is not enabled yet. Please import product_schema_v2.sql.';
+            $flashType = 'error';
+        } else {
+            $restoreId = (int)($_POST['id'] ?? 0);
+            if ($restoreId > 0) {
+                $stmt = $conn->prepare("UPDATE products SET archived_at = NULL WHERE id = ?");
+                if ($stmt) {
+                    $stmt->bind_param('i', $restoreId);
+                    $ok = $stmt->execute();
+                    $stmt->close();
+                    if ($ok) { header('Location: product.php?msg=restored'); exit(); }
+                }
+                $flash = 'Failed to restore product.';
+                $flashType = 'error';
+            }
+        }
+    }
 }
 
 $msg = (string)($_GET['msg'] ?? '');
 if ($msg === 'created') { $flash = 'Product created.'; $flashType = 'success'; }
 if ($msg === 'updated') { $flash = 'Product updated.'; $flashType = 'success'; }
 if ($msg === 'deleted') { $flash = 'Product deleted.'; $flashType = 'success'; }
+if ($msg === 'archived') { $flash = 'Product archived.'; $flashType = 'success'; }
+if ($msg === 'restored') { $flash = 'Product restored.'; $flashType = 'success'; }
 
 $q = trim((string)($_GET['q'] ?? ''));
 $filter = (string)($_GET['filter'] ?? '');
+$showArchived = (string)($_GET['show_archived'] ?? '0') === '1';
 
 $rows = [];
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
@@ -215,7 +387,22 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         $where[] = "p.status = 'inactive'";
     }
 
-    $sql = "SELECT p.id, p.sku, p.name, COALESCE(c.name, '—') AS category_name, p.stock_qty, p.reorder_level, p.status, p.created_at FROM products p LEFT JOIN categories c ON c.id = p.category_id";
+    if ($hasProdArchivedAt && !$showArchived) {
+        $where[] = 'p.archived_at IS NULL';
+    }
+
+    $selectCols = "p.id, p.sku, p.name, COALESCE(c.name, '—') AS category_name, p.stock_qty, p.reorder_level, p.status, p.created_at";
+    if ($hasProdArchivedAt) {
+        $selectCols .= ', p.archived_at';
+    } else {
+        $selectCols .= ', NULL AS archived_at';
+    }
+    if ($hasProdImagePath) {
+        $selectCols .= ', p.image_path';
+    } else {
+        $selectCols .= ', NULL AS image_path';
+    }
+    $sql = "SELECT $selectCols FROM products p LEFT JOIN categories c ON c.id = p.category_id";
     if (count($where) > 0) {
         $sql .= ' WHERE ' . implode(' AND ', $where);
     }
@@ -278,7 +465,23 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
                 <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
                 <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <li class="nav-link"><a href="transactions.php"><i class='bx bx-transfer-alt icon'></i><span class="text nav-text">Stock In/Out</span></a></li>
+                <?php if (has_perm('movement.view') || has_perm('location.view')) { ?>
+                    <li class="nav-dropdown">
+                        <a href="#" class="dropdown-toggle">
+                            <i class='bx bx-transfer-alt icon'></i>
+                            <span class="text nav-text">Stock</span>
+                            <i class='bx bx-chevron-down dd-icon'></i>
+                        </a>
+                        <ul class="submenu">
+                            <?php if (has_perm('movement.view')) { ?>
+                                <li class="nav-link"><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
+                            <?php } ?>
+                            <?php if (has_perm('location.view')) { ?>
+                                <li class="nav-link"><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
+                            <?php } ?>
+                        </ul>
+                    </li>
+                <?php } ?>
             </ul>
         </div>
         <div class="bottom-content">
@@ -317,7 +520,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <div class="alert <?php echo htmlspecialchars($flashType, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($flash, ENT_QUOTES, 'UTF-8'); ?></div>
                 <?php } ?>
 
-                <form method="post" class="form">
+                <form method="post" class="form" enctype="multipart/form-data">
                     <input type="hidden" name="action" value="save">
                     <input type="hidden" name="id" value="<?php echo (int)($action === 'edit' ? $id : 0); ?>">
                     <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
@@ -326,6 +529,16 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <label class="label">SKU</label>
                         <input class="input" type="text" name="sku" value="<?php echo htmlspecialchars($sku, ENT_QUOTES, 'UTF-8'); ?>" required>
                     </div>
+
+                    <?php if ($hasProdImagePath) { ?>
+                        <div class="form-row">
+                            <label class="label">Image</label>
+                            <input class="input" type="file" name="image" accept="image/jpeg,image/png,image/webp">
+                            <?php if ($action === 'edit' && $imagePath !== '') { ?>
+                                <div class="muted" style="margin-top: 6px;">Current: <?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?></div>
+                            <?php } ?>
+                        </div>
+                    <?php } ?>
                     <div class="form-row">
                         <label class="label">Name</label>
                         <input class="input" type="text" name="name" value="<?php echo htmlspecialchars($name, ENT_QUOTES, 'UTF-8'); ?>" required>
@@ -394,14 +607,28 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <option value="low" <?php echo $filter === 'low' ? 'selected' : ''; ?>>Low Stock</option>
                         <option value="out" <?php echo $filter === 'out' ? 'selected' : ''; ?>>Out of Stock</option>
                     </select>
+                    <?php if ($hasProdArchivedAt) { ?>
+                        <input type="hidden" name="show_archived" value="<?php echo $showArchived ? '1' : '0'; ?>">
+                    <?php } ?>
                     <button class="btn" type="submit">Apply</button>
                     <a class="btn" href="product.php">Reset</a>
                 </form>
+
+                <?php if ($hasProdArchivedAt) { ?>
+                    <div class="toolbar" style="grid-template-columns: 1fr auto; align-items: center; margin-top: 10px;">
+                        <div class="muted">Archived products are hidden by default.</div>
+                        <?php
+                            $toggleParams = ['q' => $q, 'filter' => $filter, 'show_archived' => $showArchived ? '0' : '1'];
+                        ?>
+                        <a class="btn" href="product.php?<?php echo htmlspecialchars(http_build_query($toggleParams), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $showArchived ? 'Hide Archived' : 'Show Archived'; ?></a>
+                    </div>
+                <?php } ?>
 
                 <div class="table-wrap">
                     <table class="table">
                         <thead>
                         <tr>
+                            <th>Image</th>
                             <th>SKU</th>
                             <th>Name</th>
                             <th>Category</th>
@@ -414,21 +641,66 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </thead>
                         <tbody>
                         <?php if (count($rows) === 0) { ?>
-                            <tr><td colspan="8" class="muted">No products found.</td></tr>
+                            <tr><td colspan="9" class="muted">No products found.</td></tr>
                         <?php } else { ?>
                             <?php foreach ($rows as $r) { ?>
                                 <tr>
+                                    <td>
+                                        <?php if ($hasProdImagePath && !empty($r['image_path'])) { ?>
+                                            <img src="<?php echo htmlspecialchars((string)$r['image_path'], ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 38px; height: 38px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                                        <?php } else { ?>
+                                            <span class="muted">—</span>
+                                        <?php } ?>
+                                    </td>
                                     <td><?php echo htmlspecialchars((string)$r['sku'], ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo htmlspecialchars((string)$r['name'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars((string)$r['name'], ENT_QUOTES, 'UTF-8'); ?>
+                                        <?php if ($hasProdArchivedAt && !empty($r['archived_at'])) { ?>
+                                            <span class="muted">(archived)</span>
+                                        <?php } ?>
+                                    </td>
                                     <td><?php echo htmlspecialchars((string)$r['category_name'], ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo (int)($r['stock_qty'] ?? 0); ?></td>
+                                    <td>
+                                        <?php
+                                            $stockQty = (int)($r['stock_qty'] ?? 0);
+                                            $reorderLvl = (int)($r['reorder_level'] ?? 0);
+                                            echo (int)$stockQty;
+                                            if ($stockQty <= 0) {
+                                                echo ' <span class="muted">(out)</span>';
+                                            } elseif ($stockQty <= $reorderLvl) {
+                                                echo ' <span class="muted">(low)</span>';
+                                            }
+                                        ?>
+                                    </td>
                                     <td><?php echo (int)($r['reorder_level'] ?? 0); ?></td>
                                     <td><?php echo htmlspecialchars((string)$r['status'], ENT_QUOTES, 'UTF-8'); ?></td>
                                     <td><?php echo htmlspecialchars((string)($r['created_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                                     <td>
                                         <div class="row-actions">
+                                            <a class="btn" href="product_view.php?id=<?php echo (int)$r['id']; ?>">View</a>
+                                            <?php
+                                                $restockParams = ['product_id' => (int)$r['id'], 'movement_type' => 'in'];
+                                            ?>
+                                            <a class="btn" href="transactions.php?<?php echo htmlspecialchars(http_build_query($restockParams), ENT_QUOTES, 'UTF-8'); ?>">Restock</a>
                                             <?php if (has_perm('product.edit')) { ?>
                                                 <a class="btn" href="product.php?action=edit&id=<?php echo (int)$r['id']; ?>">Edit</a>
+                                            <?php } ?>
+                                            <?php if ($hasProdArchivedAt && has_perm('product.edit')) { ?>
+                                                <?php if (!empty($r['archived_at'])) { ?>
+                                                    <form method="post" class="inline">
+                                                        <input type="hidden" name="action" value="restore">
+                                                        <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <button class="btn" type="submit">Restore</button>
+                                                    </form>
+                                                <?php } else { ?>
+                                                    <form method="post" class="inline" onsubmit="return confirm('Archive this product?');">
+                                                        <input type="hidden" name="action" value="archive">
+                                                        <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
+                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                        <button class="btn" type="submit">Archive</button>
+                                                    </form>
+                                                <?php } ?>
                                             <?php } ?>
                                             <?php if (has_perm('product.delete')) { ?>
                                                 <form method="post" class="inline" onsubmit="return confirm('Delete this product? This also deletes its movements.');">
