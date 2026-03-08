@@ -150,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         } else {
                             $stmt2 = $conn->prepare("INSERT INTO products (sku, name, category_id, unit_cost, unit_price, stock_qty, reorder_level, status) VALUES (?, ?, ?, ?, ?, 0, ?, ?)");
                             if ($stmt2) {
-                                $stmt2->bind_param('ssidddis', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status);
+                                $stmt2->bind_param('ssiddis', $sku, $name, $catVal, $costVal, $priceVal, $reorderVal, $status);
                                 $ok = $stmt2->execute();
                                 $stmt2->close();
                                 if ($ok) { header('Location: product.php?msg=created'); exit(); }
