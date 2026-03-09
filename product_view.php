@@ -40,8 +40,32 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     }
 }
 
+$hasLocationsTable = false;
+$hasLocationStocksTable = false;
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    if ($stmtTbl = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'locations'")) {
+        $stmtTbl->execute();
+        $c = 0;
+        $stmtTbl->bind_result($c);
+        if ($stmtTbl->fetch()) {
+            $hasLocationsTable = ((int)$c) > 0;
+        }
+        $stmtTbl->close();
+    }
+    if ($stmtTbl = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'location_stocks'")) {
+        $stmtTbl->execute();
+        $c = 0;
+        $stmtTbl->bind_result($c);
+        if ($stmtTbl->fetch()) {
+            $hasLocationStocksTable = ((int)$c) > 0;
+        }
+        $stmtTbl->close();
+    }
+}
+
 $product = null;
 $movements = [];
+$stockByLocation = [];
 
 $moveType = (string)($_GET['move_type'] ?? '');
 $dateFrom = (string)($_GET['date_from'] ?? '');
@@ -78,6 +102,26 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     }
 
     if ($product) {
+        if ($hasLocationsTable && $hasLocationStocksTable) {
+            $sqlLoc = "SELECT l.id, l.name, COALESCE(ls.qty, 0) AS qty
+                        FROM locations l
+                        LEFT JOIN location_stocks ls ON ls.location_id = l.id AND ls.product_id = ?
+                        WHERE l.status = 'active'
+                        ORDER BY l.name ASC, l.id ASC";
+            $stmtLoc = $conn->prepare($sqlLoc);
+            if ($stmtLoc) {
+                $stmtLoc->bind_param('i', $id);
+                $stmtLoc->execute();
+                $resLoc = $stmtLoc->get_result();
+                if ($resLoc) {
+                    while ($r = $resLoc->fetch_assoc()) {
+                        $stockByLocation[] = $r;
+                    }
+                }
+                $stmtLoc->close();
+            }
+        }
+
         $where = ['sm.product_id = ?'];
         $params = [$id];
         $types = 'i';
@@ -206,7 +250,25 @@ $stockValue = $stockQty * $unitCost;
                 <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
                 <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
                 <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <li class="nav-link"><a href="transactions.php"><i class='bx bx-transfer-alt icon'></i><span class="text nav-text">Stock In/Out</span></a></li>
+                <?php $canMovement = has_perm('movement.view'); ?>
+                <?php $canLocations = has_perm('location.view'); ?>
+                <?php if ($canMovement || $canLocations) { ?>
+                    <li class="nav-dropdown">
+                        <a href="#" class="dropdown-toggle">
+                            <i class='bx bx-transfer-alt icon'></i>
+                            <span class="text nav-text">Stock</span>
+                            <i class='bx bx-chevron-down dd-icon'></i>
+                        </a>
+                        <ul class="submenu">
+                            <?php if ($canMovement) { ?>
+                                <li><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
+                            <?php } ?>
+                            <?php if ($canLocations) { ?>
+                                <li><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
+                            <?php } ?>
+                        </ul>
+                    </li>
+                <?php } ?>
             </ul>
         </div>
         <div class="bottom-content">
@@ -308,6 +370,27 @@ $stockValue = $stockQty * $unitCost;
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">Stock by Location</div>
+                <div class="panel-icon bg-purple"><i class='bx bx-map-pin'></i></div>
+            </div>
+            <div class="panel-body">
+                <?php if (!$hasLocationsTable || !$hasLocationStocksTable) { ?>
+                    <div class="muted">Location stock tracking is not enabled yet.</div>
+                <?php } elseif (count($stockByLocation) === 0) { ?>
+                    <div class="muted">No locations found.</div>
+                <?php } else { ?>
+                    <?php foreach ($stockByLocation as $ls) { ?>
+                        <div class="panel-row">
+                            <div><?php echo htmlspecialchars((string)($ls['name'] ?? '—'), ENT_QUOTES, 'UTF-8'); ?></div>
+                            <div class="num"><?php echo (int)($ls['qty'] ?? 0); ?></div>
+                        </div>
+                    <?php } ?>
+                <?php } ?>
             </div>
         </div>
 

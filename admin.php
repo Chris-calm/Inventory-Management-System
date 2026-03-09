@@ -393,7 +393,25 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
                 <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
                 <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <li class="nav-link"><a href="transactions.php"><i class='bx bx-transfer-alt icon'></i><span class="text nav-text">Stock In/Out</span></a></li>
+                <?php $canMovement = has_perm('movement.view'); ?>
+                <?php $canLocations = has_perm('location.view'); ?>
+                <?php if ($canMovement || $canLocations) { ?>
+                    <li class="nav-dropdown">
+                        <a href="#" class="dropdown-toggle">
+                            <i class='bx bx-transfer-alt icon'></i>
+                            <span class="text nav-text">Stock</span>
+                            <i class='bx bx-chevron-down dd-icon'></i>
+                        </a>
+                        <ul class="submenu">
+                            <?php if ($canMovement) { ?>
+                                <li><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
+                            <?php } ?>
+                            <?php if ($canLocations) { ?>
+                                <li><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
+                            <?php } ?>
+                        </ul>
+                    </li>
+                <?php } ?>
                 <li class="nav-link"><a href="admin.php"><i class='bx bx-shield-quarter icon'></i><span class="text nav-text">Admin</span></a></li>
             </ul>
         </div>

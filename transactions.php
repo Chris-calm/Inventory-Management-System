@@ -367,11 +367,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
         } elseif ($qty <= 0) {
             $flash = 'Quantity must be greater than 0.';
             $flashType = 'error';
-        } elseif ($movementType === 'transfer') {
-            if (!$hasTransferFields || !$hasLocationStocks) {
-                $flash = 'Transfer workflow is not enabled yet. Please import locations_schema.sql and stock_schema_v3.sql.';
-                $flashType = 'error';
-            }
+        } elseif ($movementType === 'transfer' && (!$hasTransferFields || !$hasLocationStocks)) {
+            $flash = 'Transfer workflow is not enabled yet. Please import locations_schema.sql and stock_schema_v3.sql.';
+            $flashType = 'error';
         } else {
             $canApprove = !$hasApprovalStatus || has_perm('movement.approve');
 

@@ -668,6 +668,11 @@ html.dark .switch::before {
     display: block;
 }
 
+.sidebar li.nav-dropdown {
+    display: block;
+    height: auto;
+}
+
 .nav-dropdown .dropdown-toggle {
     text-decoration: none;
     height: 50px;
@@ -677,6 +682,20 @@ html.dark .switch::before {
     border-radius: 6px;
     transition: var(--tran-04);
     cursor: pointer;
+}
+
+body:not(.dark) .nav-dropdown .dropdown-toggle:hover,
+html:not(.dark) .nav-dropdown .dropdown-toggle:hover,
+body:not(.dark) .nav-dropdown.open .dropdown-toggle,
+html:not(.dark) .nav-dropdown.open .dropdown-toggle {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+body.dark .nav-dropdown .dropdown-toggle:hover,
+html.dark .nav-dropdown .dropdown-toggle:hover,
+body.dark .nav-dropdown.open .dropdown-toggle,
+html.dark .nav-dropdown.open .dropdown-toggle {
+    background: rgba(255, 255, 255, 0.06);
 }
 
 .nav-dropdown .dd-icon {
@@ -704,6 +723,8 @@ html.dark .switch::before {
 .nav-dropdown .submenu li {
     height: auto;
     margin-top: 6px;
+    display: block;
+    align-items: unset;
 }
 
 .nav-dropdown .submenu a {
@@ -713,6 +734,48 @@ html.dark .switch::before {
     border-radius: 6px;
     text-decoration: none;
     padding-left: 10px;
+}
+
+.nav-dropdown .submenu a {
+    position: relative;
+    margin-left: 10px;
+    width: calc(100% - 10px);
+    border-radius: 10px;
+}
+
+.nav-dropdown .submenu a::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 4px;
+    border-radius: 999px;
+    background: transparent;
+}
+
+body:not(.dark) .nav-dropdown .submenu a:hover,
+html:not(.dark) .nav-dropdown .submenu a:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+body.dark .nav-dropdown .submenu a:hover,
+html.dark .nav-dropdown .submenu a:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+body:not(.dark) .nav-dropdown .submenu a:hover::before,
+html:not(.dark) .nav-dropdown .submenu a:hover::before,
+body.dark .nav-dropdown .submenu a:hover::before,
+html.dark .nav-dropdown .submenu a:hover::before {
+    background: #60a5fa;
+}
+
+body:not(.dark) .nav-dropdown .submenu a:hover .text,
+html:not(.dark) .nav-dropdown .submenu a:hover .text,
+body.dark .nav-dropdown .submenu a:hover .text,
+html.dark .nav-dropdown .submenu a:hover .text {
+    color: rgba(255, 255, 255, 0.92);
 }
 
 .sidebar.close .nav-dropdown.open .submenu {

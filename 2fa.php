@@ -59,8 +59,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'product.create' => true,
                     'product.edit' => true,
                     'product.delete' => true,
+                    'location.view' => true,
+                    'location.create' => true,
+                    'location.edit' => true,
+                    'location.delete' => true,
                     'movement.view' => true,
                     'movement.create' => true,
+                    'movement.approve' => true,
                 ];
             } else {
                 $_SESSION['perms'] = [
