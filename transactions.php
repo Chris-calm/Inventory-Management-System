@@ -93,6 +93,8 @@ $destType = (string)($_POST['dest_type'] ?? 'location');
 $destLocationId = (int)($_POST['dest_location_id'] ?? 0);
 $destName = trim((string)($_POST['dest_name'] ?? ''));
 
+$movementLocationId = (int)($_POST['movement_location_id'] ?? 0);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     if (!csrf_validate()) {
         http_response_code(400);
@@ -292,6 +294,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         audit_log($conn, 'movement.approve', 'movement_id=' . (string)$moveId, null);
                         header('Location: transactions.php?msg=approved');
                         exit();
+                    }
+
+                    if (($movementType2 === 'in' || $movementType2 === 'out') && $hasTransferFields && $hasLocationStocks) {
+                        $locId = 0;
+                        if ($movementType2 === 'in') {
+                            $locId = (int)($mv['dest_location_id'] ?? 0);
+                        } else {
+                            $locId = (int)($mv['source_location_id'] ?? 0);
+                        }
+
+                        if ($locId > 0) {
+                            $stmt = $conn->prepare("SELECT qty FROM location_stocks WHERE location_id = ? AND product_id = ? FOR UPDATE");
+                            if (!$stmt) {
+                                throw new Exception('Failed to load location stock.');
+                            }
+                            $stmt->bind_param('ii', $locId, $productId2);
+                            $stmt->execute();
+                            $res = $stmt->get_result();
+                            $row = $res ? $res->fetch_assoc() : null;
+                            $stmt->close();
+
+                            $cur = (int)($row['qty'] ?? 0);
+                            if ($movementType2 === 'out' && $cur < $qty2) {
+                                throw new Exception('Not enough stock in source location.');
+                            }
+                            $newQty = $cur + ($movementType2 === 'in' ? $qty2 : -$qty2);
+                            $stmt2 = $conn->prepare("INSERT INTO location_stocks (location_id, product_id, qty) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE qty = VALUES(qty)");
+                            if (!$stmt2) {
+                                throw new Exception('Failed to update location stock.');
+                            }
+                            $stmt2->bind_param('iii', $locId, $productId2, $newQty);
+                            if (!$stmt2->execute()) {
+                                $stmt2->close();
+                                throw new Exception('Failed to update location stock.');
+                            }
+                            $stmt2->close();
+                        }
                     }
 
                     $stmt = $conn->prepare("SELECT stock_qty FROM products WHERE id = ? FOR UPDATE");
@@ -578,12 +617,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                     exit();
                 }
 
-                if ($hasApprovalStatus && !$canApprove) {
-                    $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status) VALUES (?, ?, ?, ?, ?, 'pending')");
-                    if (!$stmt3) {
-                        throw new Exception('Failed to record movement.');
+                if (($movementType === 'in' || $movementType === 'out') && $hasTransferFields && $hasLocationStocks && count($locations) > 0) {
+                    if ($movementLocationId <= 0) {
+                        throw new Exception('Location is required.');
                     }
-                    $stmt3->bind_param('isisi', $productId, $movementType, $qty, $note, $createdBy);
+                }
+
+                if ($hasApprovalStatus && !$canApprove) {
+                    if (($movementType === 'in' || $movementType === 'out') && $hasTransferFields && $hasLocationStocks && $movementLocationId > 0) {
+                        if ($movementType === 'in') {
+                            $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, source_type, source_name, dest_type, dest_location_id, dest_name) VALUES (?, ?, ?, ?, ?, 'pending', 'supplier', 'Supplier', 'location', ?, NULL)");
+                            if (!$stmt3) {
+                                throw new Exception('Failed to record movement.');
+                            }
+                            $stmt3->bind_param('isisi' . 'i', $productId, $movementType, $qty, $note, $createdBy, $movementLocationId);
+                        } else {
+                            $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, source_type, source_location_id, source_name, dest_type, dest_name) VALUES (?, ?, ?, ?, ?, 'pending', 'location', ?, NULL, 'customer', 'Customer')");
+                            if (!$stmt3) {
+                                throw new Exception('Failed to record movement.');
+                            }
+                            $stmt3->bind_param('isisi' . 'i', $productId, $movementType, $qty, $note, $createdBy, $movementLocationId);
+                        }
+                    } else {
+                        $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status) VALUES (?, ?, ?, ?, ?, 'pending')");
+                        if (!$stmt3) {
+                            throw new Exception('Failed to record movement.');
+                        }
+                        $stmt3->bind_param('isisi', $productId, $movementType, $qty, $note, $createdBy);
+                    }
+
                     if (!$stmt3->execute()) {
                         $stmt3->close();
                         throw new Exception('Failed to record movement.');
@@ -629,6 +691,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                     $newStock = $qty;
                 }
 
+                if (($movementType === 'in' || $movementType === 'out') && $hasTransferFields && $hasLocationStocks && $movementLocationId > 0) {
+                    $stmt = $conn->prepare("SELECT qty FROM location_stocks WHERE location_id = ? AND product_id = ? FOR UPDATE");
+                    if (!$stmt) {
+                        throw new Exception('Failed to load location stock.');
+                    }
+                    $stmt->bind_param('ii', $movementLocationId, $productId);
+                    $stmt->execute();
+                    $res = $stmt->get_result();
+                    $row = $res ? $res->fetch_assoc() : null;
+                    $stmt->close();
+                    $cur = (int)($row['qty'] ?? 0);
+                    if ($movementType === 'out' && $cur < $qty) {
+                        throw new Exception('Not enough stock in source location.');
+                    }
+                    $newQty = $cur + ($movementType === 'in' ? $qty : -$qty);
+                    $stmt2 = $conn->prepare("INSERT INTO location_stocks (location_id, product_id, qty) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE qty = VALUES(qty)");
+                    if (!$stmt2) {
+                        throw new Exception('Failed to update location stock.');
+                    }
+                    $stmt2->bind_param('iii', $movementLocationId, $productId, $newQty);
+                    if (!$stmt2->execute()) {
+                        $stmt2->close();
+                        throw new Exception('Failed to update location stock.');
+                    }
+                    $stmt2->close();
+                }
+
                 $stmt2 = $conn->prepare("UPDATE products SET stock_qty = ? WHERE id = ?");
                 if (!$stmt2) {
                     throw new Exception('Failed to update stock.');
@@ -641,11 +730,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                 $stmt2->close();
 
                 if ($hasApprovalStatus) {
-                    $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, approved_by, approved_at) VALUES (?, ?, ?, ?, ?, 'approved', ?, NOW())");
-                    if (!$stmt3) {
-                        throw new Exception('Failed to record movement.');
+                    if (($movementType === 'in' || $movementType === 'out') && $hasTransferFields && $hasLocationStocks && $movementLocationId > 0) {
+                        if ($movementType === 'in') {
+                            $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, approved_by, approved_at, source_type, source_name, dest_type, dest_location_id, dest_name) VALUES (?, ?, ?, ?, ?, 'approved', ?, NOW(), 'supplier', 'Supplier', 'location', ?, NULL)");
+                            if (!$stmt3) {
+                                throw new Exception('Failed to record movement.');
+                            }
+                            $stmt3->bind_param('isisi' . 'i' . 'i', $productId, $movementType, $qty, $note, $createdBy, $createdBy, $movementLocationId);
+                        } else {
+                            $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, approved_by, approved_at, source_type, source_location_id, source_name, dest_type, dest_name) VALUES (?, ?, ?, ?, ?, 'approved', ?, NOW(), 'location', ?, NULL, 'customer', 'Customer')");
+                            if (!$stmt3) {
+                                throw new Exception('Failed to record movement.');
+                            }
+                            $stmt3->bind_param('isisi' . 'i' . 'i', $productId, $movementType, $qty, $note, $createdBy, $createdBy, $movementLocationId);
+                        }
+                    } else {
+                        $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by, approval_status, approved_by, approved_at) VALUES (?, ?, ?, ?, ?, 'approved', ?, NOW())");
+                        if (!$stmt3) {
+                            throw new Exception('Failed to record movement.');
+                        }
+                        $stmt3->bind_param('isisi' . 'i', $productId, $movementType, $qty, $note, $createdBy, $createdBy);
                     }
-                    $stmt3->bind_param('isisi' . 'i', $productId, $movementType, $qty, $note, $createdBy, $createdBy);
                 } else {
                     $stmt3 = $conn->prepare("INSERT INTO stock_movements (product_id, movement_type, qty, note, created_by) VALUES (?, ?, ?, ?, ?)");
                     if (!$stmt3) {
@@ -843,7 +948,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <div class="form-row two">
                         <div>
                             <label class="label">Type</label>
-                            <select class="input" name="movement_type" onchange="(function(sel){var tf=document.getElementById('transferFields'); if(!tf) return; tf.style.display=(sel.value==='transfer')?'grid':'none';})(this)">
+                            <select class="input" name="movement_type" onchange="(function(sel){var isMovLoc=(sel.value==='in'||sel.value==='out'); var tf=document.getElementById('transferFields'); if(tf){tf.style.display=(sel.value==='transfer')?'grid':'none';} var ml=document.getElementById('movementLocationRow'); if(ml){ml.style.display=isMovLoc?'block':'none';} var mll=document.getElementById('movementLocationLabel'); if(mll){mll.textContent=(sel.value==='out')?'Location (source)':'Location (destination)';} var mls=document.getElementById('movementLocationSelect'); if(mls){mls.required=isMovLoc; mls.disabled=!isMovLoc; if(!isMovLoc){mls.value='';}}})(this)">
                                 <option value="in" <?php echo $movementType === 'in' ? 'selected' : ''; ?>>Stock In</option>
                                 <option value="out" <?php echo $movementType === 'out' ? 'selected' : ''; ?>>Stock Out</option>
                                 <option value="adjust" <?php echo $movementType === 'adjust' ? 'selected' : ''; ?>>Adjust (set stock)</option>
@@ -859,6 +964,18 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         <label class="label">Note</label>
                         <input class="input" type="text" name="note" value="<?php echo htmlspecialchars($note, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
                     </div>
+
+                    <?php if ($hasTransferFields && $hasLocationStocks && count($locations) > 0) { ?>
+                        <div class="form-row" id="movementLocationRow" style="display: <?php echo ($movementType === 'in' || $movementType === 'out') ? 'block' : 'none'; ?>;">
+                            <label class="label" id="movementLocationLabel"><?php echo $movementType === 'out' ? 'Location (source)' : 'Location (destination)'; ?></label>
+                            <select class="input" id="movementLocationSelect" name="movement_location_id" <?php echo ($movementType === 'in' || $movementType === 'out') ? 'required' : 'disabled'; ?>>
+                                <option value="">Select a location</option>
+                                <?php foreach ($locations as $l) { ?>
+                                    <option value="<?php echo (int)($l['id'] ?? 0); ?>" <?php echo $movementLocationId === (int)($l['id'] ?? 0) ? 'selected' : ''; ?>><?php echo htmlspecialchars((string)($l['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php } ?>
+                            </select>
+                        </div>
+                    <?php } ?>
 
                     <?php if ($hasTransferFields && count($locations) > 0) { ?>
                         <div class="form-row" id="transferFields" style="display: <?php echo $movementType === 'transfer' ? 'grid' : 'none'; ?>; gap: 12px;">
