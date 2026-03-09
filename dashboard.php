@@ -26,10 +26,10 @@ $stats = [
 
 $recentActivity = [];
 $recentProducts = [];
-$trendLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-$trendValues = [12, 18, 15, 22, 20, 9];
-$topCategoryLabels = ['Category A', 'Category B', 'Category C', 'Category D'];
-$topCategoryValues = [7, 4, 3, 2];
+$trendLabels = [];
+$trendValues = [];
+$topCategoryLabels = [];
+$topCategoryValues = [];
 
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     $queries = [
@@ -98,7 +98,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     }
     if (count($trendLabels) === 0) {
         $trendLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-        $trendValues = [12, 18, 15, 22, 20, 9];
+        $trendValues = [0, 0, 0, 0, 0, 0];
     }
 
     $topCategoryLabels = [];
@@ -111,8 +111,8 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         $res->free();
     }
     if (count($topCategoryLabels) === 0) {
-        $topCategoryLabels = ['Category A', 'Category B', 'Category C', 'Category D'];
-        $topCategoryValues = [7, 4, 3, 2];
+        $topCategoryLabels = ['No Data'];
+        $topCategoryValues = [0];
     }
 }
 ?>
@@ -341,7 +341,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             <div class="charts-grid">
                 <div class="panel">
                     <div class="panel-header">
-                        <div class="panel-title">Stock Trend (Demo)</div>
+                        <div class="panel-title">Stock Trend</div>
                         <div class="panel-icon bg-blue"><i class='bx bx-trending-up'></i></div>
                     </div>
                     <div class="panel-body">
@@ -350,7 +350,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 </div>
                 <div class="panel">
                     <div class="panel-header">
-                        <div class="panel-title">Top Categories (Demo)</div>
+                        <div class="panel-title">Top Categories</div>
                         <div class="panel-icon bg-green"><i class='bx bx-bar-chart'></i></div>
                     </div>
                     <div class="panel-body">
@@ -361,7 +361,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 
             <div class="panel">
                 <div class="panel-header">
-                    <div class="panel-title">Recent Products (Demo)</div>
+                    <div class="panel-title">Recent Products</div>
                     <div class="panel-icon bg-purple"><i class='bx bx-list-ul'></i></div>
                 </div>
                 <div class="panel-body">
