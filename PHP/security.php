@@ -74,7 +74,7 @@ function audit_log(mysqli $conn, string $action, ?string $details = null, ?int $
 function require_login(): void
 {
     if (!isset($_SESSION["username"])) {
-        header("Location: index.php");
+        header("Location: ../index.php");
         exit();
     }
 }

@@ -1,8 +1,8 @@
 <?php
 session_start();
 
-require_once __DIR__ . '/db.php';
-require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/PHP/db.php';
+require_once __DIR__ . '/PHP/security.php';
 
 $error = null;
 
@@ -58,7 +58,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                             'totp_secret' => $totpSecret,
                         ];
                         audit_log($conn, 'auth.password_ok_2fa_required', '2FA required for user: ' . (string)$user['username'], $userId);
-                        header('Location: 2fa.php');
+                        header('Location: PHP/2fa.php');
                         exit();
                     }
 
@@ -114,7 +114,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         }
                     }
                     audit_log($conn, 'auth.login_success', 'Login success for user: ' . (string)$user['username'], $userId);
-                    header("Location: dashboard.php");
+                    header("Location: PHP/dashboard.php");
                     exit();
                 }
 
@@ -132,14 +132,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login Page</title>
-    <link rel="stylesheet" href="loginstyle.css">
+    <link rel="stylesheet" href="CSS/loginstyle.css">
 </head>
 <body>
 <div class="container" id="container">
     <div class="form-container sign-in-container">
         <form action="" method="POST">
             <h1>Sign in</h1>
-            <?php if (isset($error)) echo "<p style='color: red;'>$error</p>"; ?>
+            <?php if ($error) echo "<p style='color: red;'>" . htmlspecialchars($error, ENT_QUOTES, 'UTF-8') . "</p>"; ?>
             <input type="text" name="username" placeholder="Username" required />
             <input type="password" name="password" placeholder="Password" required />
             <a href="#">Forgot your password?</a>

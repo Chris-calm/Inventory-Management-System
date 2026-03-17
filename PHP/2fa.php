@@ -4,7 +4,7 @@ require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/security.php';
 
 if (!isset($_SESSION['2fa_pending']) || !is_array($_SESSION['2fa_pending'])) {
-    header('Location: index.php');
+    header('Location: ../index.php');
     exit();
 }
 
@@ -16,7 +16,7 @@ $secret = (string)($pending['totp_secret'] ?? '');
 
 if ($userId <= 0 || $username === '' || $secret === '') {
     unset($_SESSION['2fa_pending']);
-    header('Location: index.php');
+    header('Location: ../index.php');
     exit();
 }
 
@@ -92,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>2FA Verification</title>
-    <link rel="stylesheet" href="loginstyle.css">
+    <link rel="stylesheet" href="../CSS/loginstyle.css">
 </head>
 <body>
 <div class="container" id="container">
@@ -106,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
     </div>
     <div class="overlay-container">
-        <img src="CUBE3.png" alt="logo">
+        <img src="../CUBE3.png" alt="logo">
     </div>
 </div>
 </body>

@@ -19,6 +19,7 @@ $notes = '';
 $parentId = '';
 $tag = '';
 $tagColor = '#4f46e5';
+$imagePath = '';
 
 $hasStatusColumn = false;
 $hasNotesColumn = false;
@@ -26,6 +27,7 @@ $hasParentIdColumn = false;
 $hasTagColumn = false;
 $hasTagColorColumn = false;
 $hasArchivedAtColumn = false;
+$hasImagePathColumn = false;
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'status'")) {
         $stmtCol->execute();
@@ -81,6 +83,25 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         }
         $stmtCol->close();
     }
+
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'image_path'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasImagePathColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+
+    if (!$hasImagePathColumn) {
+        try {
+            $conn->query("ALTER TABLE categories ADD COLUMN image_path VARCHAR(255) NULL");
+            $hasImagePathColumn = true;
+        } catch (Throwable $e) {
+            $hasImagePathColumn = false;
+        }
+    }
 }
 
 if ($action === 'edit') {
@@ -104,6 +125,9 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
     if ($hasTagColorColumn) {
         $selectCols .= ", tag_color";
     }
+    if ($hasImagePathColumn) {
+        $selectCols .= ", image_path";
+    }
     $stmt = $conn->prepare("SELECT $selectCols FROM categories WHERE id = ? LIMIT 1");
     if ($stmt) {
         $stmt->bind_param('i', $id);
@@ -126,6 +150,9 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
             }
             if ($hasTagColorColumn) {
                 $tagColor = (string)($row['tag_color'] ?? '#4f46e5');
+            }
+            if ($hasImagePathColumn) {
+                $imagePath = (string)($row['image_path'] ?? '');
             }
         }
         $stmt->close();
@@ -178,6 +205,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
             }
         }
 
+        if ($hasImagePathColumn) {
+            $imagePath = trim((string)($_POST['existing_image_path'] ?? $imagePath));
+            if (isset($_FILES['image']) && is_array($_FILES['image']) && isset($_FILES['image']['error']) && (int)$_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $tmpName = (string)($_FILES['image']['tmp_name'] ?? '');
+                $origName = (string)($_FILES['image']['name'] ?? '');
+                $size = (int)($_FILES['image']['size'] ?? 0);
+                $ext = strtolower((string)pathinfo($origName, PATHINFO_EXTENSION));
+                $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+
+                if ($tmpName === '' || $size <= 0) {
+                    $flash = 'Invalid image upload.';
+                    $flashType = 'error';
+                } elseif (!in_array($ext, $allowed, true)) {
+                    $flash = 'Image must be JPG, PNG, or WEBP.';
+                    $flashType = 'error';
+                } elseif ($size > 2 * 1024 * 1024) {
+                    $flash = 'Image must be 2MB or less.';
+                    $flashType = 'error';
+                } else {
+                    $uploadDir = dirname(__DIR__) . '/assets/uploads/categories';
+                    if (!is_dir($uploadDir)) {
+                        @mkdir($uploadDir, 0775, true);
+                    }
+                    $safeName = preg_replace('/[^a-zA-Z0-9_-]+/', '-', pathinfo($origName, PATHINFO_FILENAME));
+                    $fileName = 'cat_' . ($safeName !== '' ? $safeName . '_' : '') . uniqid('', true) . '.' . $ext;
+                    $dest = $uploadDir . '/' . $fileName;
+                    if (@move_uploaded_file($tmpName, $dest)) {
+                        $imagePath = 'assets/uploads/categories/' . $fileName;
+                    } else {
+                        $flash = 'Failed to save uploaded image.';
+                        $flashType = 'error';
+                    }
+                }
+            }
+        }
+
         if ($hasParentIdColumn && $hasStatusColumn && $parentVal !== null) {
             $stmtParent = $conn->prepare("SELECT status FROM categories WHERE id = ? LIMIT 1");
             if ($stmtParent) {
@@ -227,6 +290,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         if ($hasTagColorColumn) {
                             $setParts .= ", tag_color = ?";
                         }
+                        if ($hasImagePathColumn) {
+                            $setParts .= ", image_path = ?";
+                        }
                         $stmt2 = $conn->prepare("UPDATE categories SET $setParts WHERE id = ?");
                         if ($stmt2) {
                             $bindTypes = '';
@@ -253,6 +319,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                             if ($hasTagColorColumn) {
                                 $bindTypes .= 's';
                                 $bindParams[] = $tagColor;
+                            }
+                            if ($hasImagePathColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $imagePath === '' ? null : $imagePath;
                             }
                             $bindTypes .= 'i';
                             $bindParams[] = $editId;
@@ -325,6 +395,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                             $cols .= ", tag_color";
                             $vals .= ", ?";
                         }
+                        if ($hasImagePathColumn) {
+                            $cols .= ", image_path";
+                            $vals .= ", ?";
+                        }
                         $stmt2 = $conn->prepare("INSERT INTO categories ($cols) VALUES ($vals)");
                         if ($stmt2) {
                             $bindTypes = 'ss';
@@ -348,6 +422,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                             if ($hasTagColorColumn) {
                                 $bindTypes .= 's';
                                 $bindParams[] = $tagColor;
+                            }
+
+                            if ($hasImagePathColumn) {
+                                $bindTypes .= 's';
+                                $bindParams[] = $imagePath === '' ? null : $imagePath;
                             }
 
                             if ($hasParentIdColumn && $parentVal === null) {
@@ -611,6 +690,11 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     } else {
         $selectColsList .= ', NULL AS tag_color';
     }
+    if ($hasImagePathColumn) {
+        $selectColsList .= ', c.image_path';
+    } else {
+        $selectColsList .= ', NULL AS image_path';
+    }
     if ($hasArchivedAtColumn) {
         $selectColsList .= ', c.archived_at';
     } else {
@@ -668,75 +752,10 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('ims_theme');
-                if (t === 'dark') {
-                    document.documentElement.classList.add('dark');
-                    document.body && document.body.classList.add('dark');
-                }
-            } catch (e) {}
-        })();
-    </script>
-    <link rel="stylesheet" href="style2.css">
-    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <title>Category</title>
+    <?php $pageTitle = 'Category'; require __DIR__ . '/partials/head.php'; ?>
 </head>
 <body>
-<nav class="sidebar close">
-    <header>
-        <div class="image-text">
-            <span class="image"><img src="CUBE3.png" alt="logo"></span>
-            <div class="text header"><span class="name">CUBE</span><span class="proffesion">Company</span></div>
-        </div>
-        <i class='bx bx-chevron-right toggle'></i>
-    </header>
-    <div class="menu-bar">
-        <div class="menu">
-            <li class="search-box"><i class='bx bx-search icon'></i><input type="text" placeholder="Search..."></li>
-            <ul class="menu-link">
-                <li class="nav-link"><a href="dashboard.php"><i class='bx bx-home-alt icon'></i><span class="text nav-text">Dashboard</span></a></li>
-                <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
-                <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
-                <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <?php $canMovement = has_perm('movement.view'); ?>
-                <?php $canLocations = has_perm('location.view'); ?>
-                <?php if ($canMovement || $canLocations) { ?>
-                    <li class="nav-dropdown">
-                        <a href="#" class="dropdown-toggle">
-                            <i class='bx bx-transfer-alt icon'></i>
-                            <span class="text nav-text">Stock</span>
-                            <i class='bx bx-chevron-down dd-icon'></i>
-                        </a>
-                        <ul class="submenu">
-                            <?php if ($canMovement) { ?>
-                                <li><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
-                            <?php } ?>
-                            <?php if ($canLocations) { ?>
-                                <li><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
-                            <?php } ?>
-                        </ul>
-                    </li>
-                <?php } ?>
-            </ul>
-        </div>
-        <div class="bottom-content">
-            <li class="nav-link"><a href="logout.php"><i class='bx bx-log-out icon'></i><span class="text nav-text">Logout</span></a></li>
-            <li class="mode">
-                <div class="moon-sun"><i class='bx bx-moon icon moon'></i><i class='bx bx-sun icon sun'></i></div>
-                <span class="mode-text text">Dark Mode</span>
-                <div class="toggle-switch"><span class="switch"></span></div>
-            </li>
-            <?php if (has_perm('rbac.assign')) { ?>
-                <li class="nav-link"><a href="admin.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Admin</span></a></li>
-            <?php } ?>
-        </div>
-    </div>
-</nav>
+<?php require __DIR__ . '/partials/sidebar.php'; ?>
 
 <section class="home">
     <div class="page-header">
@@ -760,10 +779,13 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <div class="alert <?php echo htmlspecialchars($flashType, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($flash, ENT_QUOTES, 'UTF-8'); ?></div>
                 <?php } ?>
 
-                <form method="post" class="form">
+                <form method="post" class="form" <?php echo $hasImagePathColumn ? 'enctype="multipart/form-data"' : ''; ?>>
                     <input type="hidden" name="action" value="save">
                     <input type="hidden" name="id" value="<?php echo (int)($action === 'edit' ? $id : 0); ?>">
                     <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                    <?php if ($hasImagePathColumn) { ?>
+                        <input type="hidden" name="existing_image_path" value="<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>">
+                    <?php } ?>
 
                     <div class="form-row">
                         <label class="label">Name</label>
@@ -830,6 +852,19 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </div>
                     <?php } ?>
 
+                    <?php if ($hasImagePathColumn) { ?>
+                        <div class="form-row">
+                            <label class="label">Image</label>
+                            <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp">
+                            <?php if ($imagePath !== '') { ?>
+                                <div class="muted" style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
+                                    <img class="thumb" src="../<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <span>Current image</span>
+                                </div>
+                            <?php } ?>
+                        </div>
+                    <?php } ?>
+
                     <div class="form-actions">
                         <?php if ($action === 'edit') { ?>
                             <?php if (has_perm('category.edit')) { ?>
@@ -885,6 +920,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <table class="table">
                         <thead>
                         <tr>
+                            <?php if ($hasImagePathColumn) { ?><th>Image</th><?php } ?>
                             <th>Name</th>
                             <th>Description</th>
                             <th>Parent</th>
@@ -898,10 +934,19 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </thead>
                         <tbody>
                         <?php if (count($rows) === 0) { ?>
-                            <tr><td colspan="9" class="muted">No categories found.</td></tr>
+                            <tr><td colspan="<?php echo $hasImagePathColumn ? '10' : '9'; ?>" class="muted">No categories found.</td></tr>
                         <?php } else { ?>
                             <?php foreach ($rows as $r) { ?>
                                 <tr>
+                                    <?php if ($hasImagePathColumn) { ?>
+                                        <td>
+                                            <?php if (!empty($r['image_path'])) { ?>
+                                                <img class="thumb" src="../<?php echo htmlspecialchars((string)($r['image_path'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                            <?php } else { ?>
+                                                <span class="muted">—</span>
+                                            <?php } ?>
+                                        </td>
+                                    <?php } ?>
                                     <td>
                                         <?php echo htmlspecialchars((string)$r['name'], ENT_QUOTES, 'UTF-8'); ?>
                                         <?php if ($hasArchivedAtColumn && !empty($r['archived_at'])) { ?>
@@ -1003,6 +1048,6 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     </div>
 </section>
 
-<script src="script.js?v=20260225"></script>
+<script src="../JS/script.js?v=20260225"></script>
 </body>
 </html>

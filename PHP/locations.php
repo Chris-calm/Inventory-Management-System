@@ -9,6 +9,27 @@ require_perm('location.view');
 $flash = null;
 $flashType = 'info';
 
+$hasImagePathColumn = false;
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'locations' AND COLUMN_NAME = 'image_path'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasImagePathColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+    if (!$hasImagePathColumn) {
+        try {
+            $conn->query("ALTER TABLE locations ADD COLUMN image_path VARCHAR(255) NULL");
+            $hasImagePathColumn = true;
+        } catch (Throwable $e) {
+            $hasImagePathColumn = false;
+        }
+    }
+}
+
 $action = (string)($_GET['action'] ?? '');
 $id = (int)($_GET['id'] ?? 0);
 
@@ -16,11 +37,16 @@ $name = '';
 $code = '';
 $notes = '';
 $status = 'active';
+$imagePath = '';
 
 $editRow = null;
 if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     require_perm('location.edit');
-    $stmt = $conn->prepare("SELECT id, name, code, notes, status FROM locations WHERE id = ? LIMIT 1");
+    $selectCols = "id, name, code, notes, status";
+    if ($hasImagePathColumn) {
+        $selectCols .= ", image_path";
+    }
+    $stmt = $conn->prepare("SELECT $selectCols FROM locations WHERE id = ? LIMIT 1");
     if ($stmt) {
         $stmt->bind_param('i', $id);
         $stmt->execute();
@@ -34,6 +60,9 @@ if ($action === 'edit' && $id > 0 && isset($conn) && $conn instanceof mysqli && 
         $code = (string)($editRow['code'] ?? '');
         $notes = (string)($editRow['notes'] ?? '');
         $status = (string)($editRow['status'] ?? 'active');
+        if ($hasImagePathColumn) {
+            $imagePath = (string)($editRow['image_path'] ?? '');
+        }
     } else {
         $flash = 'Location not found.';
         $flashType = 'error';
@@ -62,6 +91,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
         $notes = trim((string)($_POST['notes'] ?? ''));
         $status = (string)($_POST['status'] ?? 'active');
 
+        if ($hasImagePathColumn) {
+            $imagePath = trim((string)($_POST['existing_image_path'] ?? $imagePath));
+            if (isset($_FILES['image']) && is_array($_FILES['image']) && isset($_FILES['image']['error']) && (int)$_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $tmpName = (string)($_FILES['image']['tmp_name'] ?? '');
+                $origName = (string)($_FILES['image']['name'] ?? '');
+                $size = (int)($_FILES['image']['size'] ?? 0);
+                $ext = strtolower((string)pathinfo($origName, PATHINFO_EXTENSION));
+                $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+
+                if ($tmpName === '' || $size <= 0) {
+                    $flash = 'Invalid image upload.';
+                    $flashType = 'error';
+                } elseif (!in_array($ext, $allowed, true)) {
+                    $flash = 'Image must be JPG, PNG, or WEBP.';
+                    $flashType = 'error';
+                } elseif ($size > 3 * 1024 * 1024) {
+                    $flash = 'Image must be 3MB or less.';
+                    $flashType = 'error';
+                } else {
+                    $uploadDir = dirname(__DIR__) . '/assets/uploads/locations';
+                    if (!is_dir($uploadDir)) {
+                        @mkdir($uploadDir, 0775, true);
+                    }
+                    $safeName = preg_replace('/[^a-zA-Z0-9_-]+/', '-', pathinfo($origName, PATHINFO_FILENAME));
+                    $fileName = 'loc_' . ($safeName !== '' ? $safeName . '_' : '') . uniqid('', true) . '.' . $ext;
+                    $dest = $uploadDir . '/' . $fileName;
+                    if (@move_uploaded_file($tmpName, $dest)) {
+                        $imagePath = 'assets/uploads/locations/' . $fileName;
+                    } else {
+                        $flash = 'Failed to save uploaded image.';
+                        $flashType = 'error';
+                    }
+                }
+            }
+        }
+
         if ($name === '') {
             $flash = 'Name is required.';
             $flashType = 'error';
@@ -83,11 +148,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                     $flashType = 'error';
                 } else {
                     if ($editId > 0) {
-                        $stmt2 = $conn->prepare("UPDATE locations SET name = ?, code = ?, notes = ?, status = ? WHERE id = ?");
+                        $set = "name = ?, code = ?, notes = ?, status = ?";
+                        if ($hasImagePathColumn) {
+                            $set .= ", image_path = ?";
+                        }
+                        $stmt2 = $conn->prepare("UPDATE locations SET $set WHERE id = ?");
                         if ($stmt2) {
                             $codeVal = $code === '' ? null : $code;
                             $notesVal = $notes === '' ? null : $notes;
-                            $stmt2->bind_param('ssssi', $name, $codeVal, $notesVal, $status, $editId);
+                            if ($hasImagePathColumn) {
+                                $imgVal = $imagePath === '' ? null : $imagePath;
+                                $stmt2->bind_param('sssssi', $name, $codeVal, $notesVal, $status, $imgVal, $editId);
+                            } else {
+                                $stmt2->bind_param('ssssi', $name, $codeVal, $notesVal, $status, $editId);
+                            }
                             $ok = $stmt2->execute();
                             $stmt2->close();
                             if ($ok) {
@@ -99,11 +173,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         $flash = 'Failed to update location.';
                         $flashType = 'error';
                     } else {
-                        $stmt2 = $conn->prepare("INSERT INTO locations (name, code, notes, status) VALUES (?, ?, ?, ?)");
+                        $cols = 'name, code, notes, status';
+                        $vals = '?, ?, ?, ?';
+                        if ($hasImagePathColumn) {
+                            $cols .= ', image_path';
+                            $vals .= ', ?';
+                        }
+                        $stmt2 = $conn->prepare("INSERT INTO locations ($cols) VALUES ($vals)");
                         if ($stmt2) {
                             $codeVal = $code === '' ? null : $code;
                             $notesVal = $notes === '' ? null : $notes;
-                            $stmt2->bind_param('ssss', $name, $codeVal, $notesVal, $status);
+                            if ($hasImagePathColumn) {
+                                $imgVal = $imagePath === '' ? null : $imagePath;
+                                $stmt2->bind_param('sssss', $name, $codeVal, $notesVal, $status, $imgVal);
+                            } else {
+                                $stmt2->bind_param('ssss', $name, $codeVal, $notesVal, $status);
+                            }
                             $ok = $stmt2->execute();
                             $newId = (int)$conn->insert_id;
                             $stmt2->close();
@@ -152,7 +237,13 @@ if ($msg === 'deleted') { $flash = 'Location deleted.'; $flashType = 'success'; 
 
 $rows = [];
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
-    if ($res = $conn->query("SELECT id, name, code, notes, status, created_at FROM locations ORDER BY name ASC")) {
+    $listCols = "id, name, code, notes, status, created_at";
+    if ($hasImagePathColumn) {
+        $listCols .= ", image_path";
+    } else {
+        $listCols .= ", NULL AS image_path";
+    }
+    if ($res = $conn->query("SELECT $listCols FROM locations ORDER BY name ASC")) {
         while ($r = $res->fetch_assoc()) { $rows[] = $r; }
         $res->free();
     }
@@ -162,75 +253,10 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('ims_theme');
-                if (t === 'dark') {
-                    document.documentElement.classList.add('dark');
-                    document.body && document.body.classList.add('dark');
-                }
-            } catch (e) {}
-        })();
-    </script>
-    <link rel="stylesheet" href="style2.css">
-    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <title>Locations</title>
+    <?php $pageTitle = 'Locations'; require __DIR__ . '/partials/head.php'; ?>
 </head>
 <body>
-<nav class="sidebar close">
-    <header>
-        <div class="image-text">
-            <span class="image"><img src="CUBE3.png" alt="logo"></span>
-            <div class="text header"><span class="name">CUBE</span><span class="proffesion">Company</span></div>
-        </div>
-        <i class='bx bx-chevron-right toggle'></i>
-    </header>
-    <div class="menu-bar">
-        <div class="menu">
-            <li class="search-box"><i class='bx bx-search icon'></i><input type="text" placeholder="Search..."></li>
-            <ul class="menu-link">
-                <li class="nav-link"><a href="dashboard.php"><i class='bx bx-home-alt icon'></i><span class="text nav-text">Dashboard</span></a></li>
-                <li class="nav-link"><a href="analytics.php"><i class='bx bx-pie-chart-alt icon'></i><span class="text nav-text">Analytics</span></a></li>
-                <li class="nav-link"><a href="category.php"><i class='bx bxs-category-alt icon'></i><span class="text nav-text">Category</span></a></li>
-                <li class="nav-link"><a href="product.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Product</span></a></li>
-                <?php $canMovement = has_perm('movement.view'); ?>
-                <?php $canLocations = has_perm('location.view'); ?>
-                <?php if ($canMovement || $canLocations) { ?>
-                    <li class="nav-dropdown">
-                        <a href="#" class="dropdown-toggle">
-                            <i class='bx bx-transfer-alt icon'></i>
-                            <span class="text nav-text">Stock</span>
-                            <i class='bx bx-chevron-down dd-icon'></i>
-                        </a>
-                        <ul class="submenu">
-                            <?php if ($canMovement) { ?>
-                                <li><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
-                            <?php } ?>
-                            <?php if ($canLocations) { ?>
-                                <li><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
-                            <?php } ?>
-                        </ul>
-                    </li>
-                <?php } ?>
-            </ul>
-        </div>
-        <div class="bottom-content">
-            <li class="nav-link"><a href="logout.php"><i class='bx bx-log-out icon'></i><span class="text nav-text">Logout</span></a></li>
-            <li class="mode">
-                <div class="moon-sun"><i class='bx bx-moon icon moon'></i><i class='bx bx-sun icon sun'></i></div>
-                <span class="mode-text text">Dark Mode</span>
-                <div class="toggle-switch"><span class="switch"></span></div>
-            </li>
-            <?php if (has_perm('rbac.assign')) { ?>
-                <li class="nav-link"><a href="admin.php"><i class='bx bxl-product-hunt icon'></i><span class="text nav-text">Admin</span></a></li>
-            <?php } ?>
-        </div>
-    </div>
-</nav>
+<?php require __DIR__ . '/partials/sidebar.php'; ?>
 
 <section class="home">
     <div class="page-header">
@@ -254,10 +280,13 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <div class="alert <?php echo htmlspecialchars($flashType, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($flash, ENT_QUOTES, 'UTF-8'); ?></div>
                 <?php } ?>
 
-                <form method="post" class="form">
+                <form method="post" class="form" <?php echo $hasImagePathColumn ? 'enctype="multipart/form-data"' : ''; ?>>
                     <input type="hidden" name="action" value="save">
                     <input type="hidden" name="id" value="<?php echo (int)($action === 'edit' ? $id : 0); ?>">
                     <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                    <?php if ($hasImagePathColumn) { ?>
+                        <input type="hidden" name="existing_image_path" value="<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>">
+                    <?php } ?>
 
                     <div class="form-row">
                         <label class="label">Name</label>
@@ -282,6 +311,19 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </select>
                     </div>
 
+                    <?php if ($hasImagePathColumn) { ?>
+                        <div class="form-row">
+                            <label class="label">Image</label>
+                            <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp">
+                            <?php if ($imagePath !== '') { ?>
+                                <div class="muted" style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
+                                    <img class="thumb" src="../<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <span>Current image</span>
+                                </div>
+                            <?php } ?>
+                        </div>
+                    <?php } ?>
+
                     <div class="form-actions">
                         <?php if ($action === 'edit') { ?>
                             <?php if (has_perm('location.edit')) { ?>
@@ -301,58 +343,50 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         <div class="panel">
             <div class="panel-header">
                 <div class="panel-title">Location List</div>
-                <div class="panel-icon bg-green"><i class='bx bx-list-ul'></i></div>
+                <div class="panel-icon bg-green"><i class='bx bx-grid-alt'></i></div>
             </div>
             <div class="panel-body">
-                <div class="table-wrap">
-                    <table class="table">
-                        <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Code</th>
-                            <th>Status</th>
-                            <th>Notes</th>
-                            <th>Created</th>
-                            <th>Actions</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <?php if (count($rows) === 0) { ?>
-                            <tr><td colspan="6" class="muted">No locations yet.</td></tr>
-                        <?php } else { ?>
-                            <?php foreach ($rows as $r) { ?>
-                                <tr>
-                                    <td><?php echo htmlspecialchars((string)($r['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo htmlspecialchars((string)($r['code'] ?? '—'), ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo htmlspecialchars((string)($r['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo htmlspecialchars((string)($r['notes'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td><?php echo htmlspecialchars((string)($r['created_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
-                                    <td>
-                                        <div class="row-actions">
-                                            <?php if (has_perm('location.edit')) { ?>
-                                                <a class="btn" href="locations.php?action=edit&id=<?php echo (int)$r['id']; ?>">Edit</a>
-                                            <?php } ?>
-                                            <?php if (has_perm('location.delete')) { ?>
-                                                <form method="post" class="inline" onsubmit="return confirm('Delete this location?');">
-                                                    <input type="hidden" name="action" value="delete">
-                                                    <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
-                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
-                                                    <button class="btn danger" type="submit">Delete</button>
-                                                </form>
-                                            <?php } ?>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php } ?>
+                <?php if (count($rows) === 0) { ?>
+                    <div class="muted">No locations yet.</div>
+                <?php } else { ?>
+                    <div class="card-grid">
+                        <?php foreach ($rows as $r) { ?>
+                            <div class="card-item">
+                                <div class="card-img">
+                                    <?php if (!empty($r['image_path'])) { ?>
+                                        <img src="../<?php echo htmlspecialchars((string)$r['image_path'], ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <?php } ?>
+                                </div>
+                                <div class="card-body">
+                                    <div class="card-title"><?php echo htmlspecialchars((string)($r['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <div class="card-meta">Code: <?php echo htmlspecialchars((string)($r['code'] ?? '—'), ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <div class="card-meta">Status: <?php echo htmlspecialchars((string)($r['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <?php if (!empty($r['notes'])) { ?>
+                                        <div class="card-meta"><?php echo htmlspecialchars((string)$r['notes'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                    <?php } ?>
+                                    <div class="card-actions">
+                                        <?php if (has_perm('location.edit')) { ?>
+                                            <a class="btn" href="locations.php?action=edit&id=<?php echo (int)$r['id']; ?>">Edit</a>
+                                        <?php } ?>
+                                        <?php if (has_perm('location.delete')) { ?>
+                                            <form method="post" style="margin: 0;" onsubmit="return confirm('Delete this location?');">
+                                                <input type="hidden" name="action" value="delete">
+                                                <input type="hidden" name="id" value="<?php echo (int)$r['id']; ?>">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                <button class="btn danger" type="submit">Delete</button>
+                                            </form>
+                                        <?php } ?>
+                                    </div>
+                                </div>
+                            </div>
                         <?php } ?>
-                        </tbody>
-                    </table>
-                </div>
+                    </div>
+                <?php } ?>
             </div>
         </div>
     </div>
 </section>
 
-<script src="script.js?v=20260225"></script>
+<script src="../JS/script.js?v=20260225"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@ session_start();
 require_once __DIR__ . '/security.php';
 
 if (!isset($_SESSION["username"])) {
-    header("Location: index.php");
+    header("Location: ../index.php");
     exit();
 }
 
@@ -119,117 +119,10 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 <!DOCTYPE html>
 <html lang="en">
     <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <script>
-            (function () {
-                try {
-                    var t = localStorage.getItem('ims_theme');
-                    if (t === 'dark') {
-                        document.documentElement.classList.add('dark');
-                        document.body && document.body.classList.add('dark');
-                    }
-                } catch (e) {}
-            })();
-        </script>
-        <link rel="stylesheet" href="style2.css">
-        <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-        <title>Dashboard</title>
+        <?php $pageTitle = 'Dashboard'; require __DIR__ . '/partials/head.php'; ?>
     </head>
     <body>
-        <nav class="sidebar close">
-            <header>
-                <div class="image-text">
-                    <span class="image">
-                        <img src="CUBE3.png" alt="logo">
-                    </span>
-                    <div class="text header">
-                        <span class="name">CUBE</span>
-                        <span class="proffesion">Company</span>
-                    </div>
-                </div>
-                <i class='bx bx-chevron-right toggle'></i>
-            </header>
-            <div class="menu-bar">
-                <div class="menu">
-                    <li class="search-box">
-                            <i class='bx bx-search icon'></i>
-                            <input type="text" placeholder="Search...">
-                    </li>
-                    <ul class="menu-link">
-                        <li class="nav-link">
-                            <a href="dashboard.php">
-                                <i class='bx bx-home-alt icon'></i>
-                                <span class="text nav-text">Dashboard</span>
-                            </a>
-                        </li>
-                        <li class="nav-link">
-                            <a href="analytics.php">
-                                <i class='bx bx-pie-chart-alt icon'></i>
-                                <span class="text nav-text">Analytics</span>
-                            </a>
-                        </li>
-                        <li class="nav-link">
-                            <a href="category.php">
-                                <i class='bx bxs-category-alt icon'></i>
-                                <span class="text nav-text">Category</span>
-                            </a>
-                        </li>
-                        <li class="nav-link">
-                           <a href="product.php">
-                                <i class='bx bxl-product-hunt icon'></i>
-                                 <span class="text nav-text">Product</span>
-                            </a>
-                        </li>
-                        <?php if (has_perm('movement.view') || has_perm('location.view')) { ?>
-                            <li class="nav-dropdown">
-                                <a href="#" class="dropdown-toggle">
-                                    <i class='bx bx-transfer-alt icon'></i>
-                                    <span class="text nav-text">Stock</span>
-                                    <i class='bx bx-chevron-down dd-icon'></i>
-                                </a>
-                                <ul class="submenu">
-                                    <?php if (has_perm('movement.view')) { ?>
-                                        <li class="nav-link"><a href="transactions.php"><span class="text nav-text">Stock In/Out</span></a></li>
-                                    <?php } ?>
-                                    <?php if (has_perm('location.view')) { ?>
-                                        <li class="nav-link"><a href="locations.php"><span class="text nav-text">Locations</span></a></li>
-                                    <?php } ?>
-                                </ul>
-                            </li>
-                        <?php } ?>
-                    </ul>
-                </div>
-                <div class="bottom-content">
-                    <li class="nav-link">
-                        <a href="logout.php">
-                             <i class='bx bx-log-out icon'></i>
-                              <span class="text nav-text">Logout</span>
-                         </a>
-                     </li>
-                     <li class="mode">
-                        <div class="moon-sun">
-                            <i class='bx bx-moon icon moon'></i>
-                            <i class='bx bx-sun icon sun'></i>
-                        </div>
-                        <span class="mode-text text">Dark Mode</span>
-
-                        <div class="toggle-switch">
-                            <span class="switch"></span>
-                        </div>
-                     </li>
-                     <?php if (has_perm('rbac.assign')) { ?>
-                         <li class="nav-link">
-                            <a href="admin.php">
-                                 <i class='bx bxl-product-hunt icon'></i>
-                                  <span class="text nav-text">Admin</span>
-                             </a>
-                         </li>
-                     <?php } ?>
-                </div>
-            </div>
-        </nav>
+        <?php require __DIR__ . '/partials/sidebar.php'; ?>
 
         <section class="home">
             <div class="page-header">
@@ -404,7 +297,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         </section>
 
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-        <script src="script.js?v=20260225"></script>
+        <script src="../JS/script.js?v=20260225"></script>
         <script>
             const trendCtx = document.getElementById('trendChart');
             if (trendCtx) {
