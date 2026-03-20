@@ -66,7 +66,7 @@ if (count($topCategoryLabels) === 0) {
             <div class="page-subtitle">Reports and charts based on your inventory data</div>
         </div>
         <div class="page-meta">
-            <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php require __DIR__ . '/partials/topbar.php'; ?>
         </div>
     </div>
 

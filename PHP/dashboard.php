@@ -32,69 +32,113 @@ $topCategoryLabels = [];
 $topCategoryValues = [];
 
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    $tableExists = function (string $table) use ($conn): bool {
+        try {
+            $t = $conn->real_escape_string($table);
+            if ($res = $conn->query("SHOW TABLES LIKE '{$t}'")) {
+                $ok = (bool)$res->fetch_assoc();
+                $res->free();
+                return $ok;
+            }
+        } catch (Throwable $e) {
+            return false;
+        }
+        return false;
+    };
+
+    $hasProducts = $tableExists('products');
+    $hasCategories = $tableExists('categories');
+    $hasMovements = $tableExists('stock_movements');
+
     $queries = [
-        'products' => "SELECT COUNT(*) AS c FROM products",
-        'categories' => "SELECT COUNT(*) AS c FROM categories",
-        'low_stock' => "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty <= reorder_level",
-        'movements' => "SELECT COUNT(*) AS c FROM stock_movements",
-        'in_stock' => "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty > 0",
-        'out_of_stock' => "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty <= 0",
-        'products_without_category' => "SELECT COUNT(*) AS c FROM products WHERE category_id IS NULL",
-        'inactive_categories' => "SELECT COUNT(*) AS c FROM categories c LEFT JOIN products p ON p.category_id = c.id WHERE p.id IS NULL",
+        'products' => $hasProducts ? "SELECT COUNT(*) AS c FROM products" : null,
+        'categories' => $hasCategories ? "SELECT COUNT(*) AS c FROM categories" : null,
+        'low_stock' => $hasProducts ? "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty <= reorder_level" : null,
+        'movements' => $hasMovements ? "SELECT COUNT(*) AS c FROM stock_movements" : null,
+        'in_stock' => $hasProducts ? "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty > 0" : null,
+        'out_of_stock' => $hasProducts ? "SELECT COUNT(*) AS c FROM products WHERE status = 'active' AND stock_qty <= 0" : null,
+        'products_without_category' => $hasProducts ? "SELECT COUNT(*) AS c FROM products WHERE category_id IS NULL" : null,
+        'inactive_categories' => ($hasCategories && $hasProducts) ? "SELECT COUNT(*) AS c FROM categories c LEFT JOIN products p ON p.category_id = c.id WHERE p.id IS NULL" : null,
     ];
 
     foreach ($queries as $key => $sql) {
-        if ($res = $conn->query($sql)) {
-            if ($row = $res->fetch_assoc()) {
-                $stats[$key] = (int)($row['c'] ?? 0);
+        if (!$sql) {
+            continue;
+        }
+        try {
+            if ($res = $conn->query($sql)) {
+                if ($row = $res->fetch_assoc()) {
+                    $stats[$key] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
             }
-            $res->free();
+        } catch (Throwable $e) {
         }
     }
 
-    if ($res = $conn->query("SELECT c.name, COUNT(p.id) AS c FROM categories c JOIN products p ON p.category_id = c.id GROUP BY c.id ORDER BY c DESC, c.name ASC LIMIT 1")) {
-        if ($row = $res->fetch_assoc()) {
-            $name = trim((string)($row['name'] ?? ''));
-            if ($name !== '') {
-                $stats['most_used_category'] = $name;
+    if ($hasCategories && $hasProducts) {
+        try {
+            if ($res = $conn->query("SELECT c.name, COUNT(p.id) AS c FROM categories c JOIN products p ON p.category_id = c.id GROUP BY c.id ORDER BY c DESC, c.name ASC LIMIT 1")) {
+                if ($row = $res->fetch_assoc()) {
+                    $name = trim((string)($row['name'] ?? ''));
+                    if ($name !== '') {
+                        $stats['most_used_category'] = $name;
+                    }
+                }
+                $res->free();
             }
+        } catch (Throwable $e) {
         }
-        $res->free();
     }
 
-    if ($res = $conn->query("SELECT sm.movement_type, sm.qty, sm.created_at, p.name AS product_name FROM stock_movements sm JOIN products p ON p.id = sm.product_id ORDER BY sm.created_at DESC, sm.id DESC LIMIT 5")) {
-        while ($row = $res->fetch_assoc()) {
-            $recentActivity[] = [
-                'type' => (string)($row['movement_type'] ?? ''),
-                'qty' => (int)($row['qty'] ?? 0),
-                'product' => (string)($row['product_name'] ?? ''),
-                'time' => (string)($row['created_at'] ?? ''),
-            ];
+    if ($hasMovements && $hasProducts) {
+        try {
+            if ($res = $conn->query("SELECT sm.movement_type, sm.qty, sm.created_at, p.name AS product_name FROM stock_movements sm JOIN products p ON p.id = sm.product_id ORDER BY sm.created_at DESC, sm.id DESC LIMIT 5")) {
+                while ($row = $res->fetch_assoc()) {
+                    $recentActivity[] = [
+                        'type' => (string)($row['movement_type'] ?? ''),
+                        'qty' => (int)($row['qty'] ?? 0),
+                        'product' => (string)($row['product_name'] ?? ''),
+                        'time' => (string)($row['created_at'] ?? ''),
+                    ];
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) {
         }
-        $res->free();
     }
 
-    if ($res = $conn->query("SELECT p.name AS product_name, COALESCE(c.name, '—') AS category_name, p.stock_qty, p.reorder_level, p.status FROM products p LEFT JOIN categories c ON c.id = p.category_id ORDER BY p.created_at DESC, p.id DESC LIMIT 7")) {
-        while ($row = $res->fetch_assoc()) {
-            $recentProducts[] = [
-                'product' => (string)($row['product_name'] ?? ''),
-                'category' => (string)($row['category_name'] ?? '—'),
-                'stock' => (int)($row['stock_qty'] ?? 0),
-                'reorder' => (int)($row['reorder_level'] ?? 0),
-                'status' => (string)($row['status'] ?? 'active'),
-            ];
+    if ($hasProducts) {
+        try {
+            if ($res = $conn->query("SELECT p.name AS product_name, COALESCE(c.name, '—') AS category_name, p.stock_qty, p.reorder_level, p.status FROM products p LEFT JOIN categories c ON c.id = p.category_id ORDER BY p.created_at DESC, p.id DESC LIMIT 7")) {
+                while ($row = $res->fetch_assoc()) {
+                    $recentProducts[] = [
+                        'product' => (string)($row['product_name'] ?? ''),
+                        'category' => (string)($row['category_name'] ?? '—'),
+                        'stock' => (int)($row['stock_qty'] ?? 0),
+                        'reorder' => (int)($row['reorder_level'] ?? 0),
+                        'status' => (string)($row['status'] ?? 'active'),
+                    ];
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) {
         }
-        $res->free();
     }
 
     $trendLabels = [];
     $trendValues = [];
-    if ($res = $conn->query("SELECT DATE_FORMAT(created_at, '%b') AS m, DATE_FORMAT(created_at, '%Y-%m') AS ym, COUNT(*) AS c FROM stock_movements WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 5 MONTH) GROUP BY ym ORDER BY ym ASC")) {
-        while ($row = $res->fetch_assoc()) {
-            $trendLabels[] = (string)($row['m'] ?? '');
-            $trendValues[] = (int)($row['c'] ?? 0);
+    if ($hasMovements) {
+        try {
+            if ($res = $conn->query("SELECT DATE_FORMAT(created_at, '%b') AS m, DATE_FORMAT(created_at, '%Y-%m') AS ym, COUNT(*) AS c FROM stock_movements WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 5 MONTH) GROUP BY ym ORDER BY ym ASC")) {
+                while ($row = $res->fetch_assoc()) {
+                    $trendLabels[] = (string)($row['m'] ?? '');
+                    $trendValues[] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) {
         }
-        $res->free();
     }
     if (count($trendLabels) === 0) {
         $trendLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
@@ -103,12 +147,17 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 
     $topCategoryLabels = [];
     $topCategoryValues = [];
-    if ($res = $conn->query("SELECT c.name, COUNT(p.id) AS c FROM categories c LEFT JOIN products p ON p.category_id = c.id GROUP BY c.id ORDER BY c DESC, c.name ASC LIMIT 6")) {
-        while ($row = $res->fetch_assoc()) {
-            $topCategoryLabels[] = (string)($row['name'] ?? '');
-            $topCategoryValues[] = (int)($row['c'] ?? 0);
+    if ($hasCategories && $hasProducts) {
+        try {
+            if ($res = $conn->query("SELECT c.name, COUNT(p.id) AS c FROM categories c LEFT JOIN products p ON p.category_id = c.id GROUP BY c.id ORDER BY c DESC, c.name ASC LIMIT 6")) {
+                while ($row = $res->fetch_assoc()) {
+                    $topCategoryLabels[] = (string)($row['name'] ?? '');
+                    $topCategoryValues[] = (int)($row['c'] ?? 0);
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) {
         }
-        $res->free();
     }
     if (count($topCategoryLabels) === 0) {
         $topCategoryLabels = ['No Data'];
@@ -125,17 +174,17 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         <?php require __DIR__ . '/partials/sidebar.php'; ?>
 
         <section class="home">
-            <div class="page-header">
+            <div class="page-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <div class="page-title">Dashboard</div>
                     <div class="page-subtitle">Overview of your inventory system</div>
                 </div>
-                <div class="page-meta">
-                    <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                <div class="page-meta self-start sm:self-auto">
+                    <?php require __DIR__ . '/partials/topbar.php'; ?>
                 </div>
             </div>
 
-            <div class="kpi-grid">
+            <div class="kpi-grid grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div class="kpi-card">
                     <div class="kpi-label">Products</div>
                     <div class="kpi-value"><?php echo (int)$stats['products']; ?></div>
@@ -159,7 +208,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             </div>
 
             <div class="section-title">System Data Overview</div>
-            <div class="summary-grid">
+            <div class="summary-grid grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div class="panel">
                     <div class="panel-header">
                         <div class="panel-title">Inventory Summary</div>
@@ -231,7 +280,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 </div>
             </div>
 
-            <div class="charts-grid">
+            <div class="charts-grid grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <div class="panel">
                     <div class="panel-header">
                         <div class="panel-title">Stock Trend</div>

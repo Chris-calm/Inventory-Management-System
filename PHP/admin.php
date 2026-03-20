@@ -40,6 +40,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
 
     $action = (string)($_POST['action'] ?? '');
 
+    if ($action === 'upload_avatar') {
+        require_perm('user.edit');
+
+        $userId = (int)($_POST['user_id'] ?? 0);
+        if ($userId <= 0) {
+            $flash = 'Invalid user.';
+            $flashType = 'error';
+        } elseif (!isset($_FILES['avatar_file']) || !is_array($_FILES['avatar_file'])) {
+            $flash = 'No file uploaded.';
+            $flashType = 'error';
+        } else {
+            $f = $_FILES['avatar_file'];
+            $tmp = (string)($f['tmp_name'] ?? '');
+            $err = (int)($f['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($err !== UPLOAD_ERR_OK || $tmp === '' || !is_uploaded_file($tmp)) {
+                $flash = 'Upload failed.';
+                $flashType = 'error';
+            } else {
+                $allowed = [
+                    'image/jpeg' => 'jpg',
+                    'image/png' => 'png',
+                    'image/webp' => 'webp',
+                ];
+
+                $mime = '';
+                try {
+                    if (class_exists('finfo')) {
+                        $fi = new finfo(FILEINFO_MIME_TYPE);
+                        $mime = (string)$fi->file($tmp);
+                    }
+                } catch (Throwable $e) {
+                    $mime = '';
+                }
+
+                $ext = $allowed[$mime] ?? '';
+                if ($ext === '') {
+                    $flash = 'Invalid image type. Please upload JPG/PNG/WebP.';
+                    $flashType = 'error';
+                } else {
+                    $dirFs = realpath(__DIR__ . '/..');
+                    $uploadDir = $dirFs ? ($dirFs . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'users') : '';
+                    if ($uploadDir === '') {
+                        $flash = 'Upload path error.';
+                        $flashType = 'error';
+                    } else {
+                        if (!is_dir($uploadDir)) {
+                            @mkdir($uploadDir, 0775, true);
+                        }
+
+                        foreach (glob($uploadDir . DIRECTORY_SEPARATOR . $userId . '.*') ?: [] as $old) {
+                            @unlink($old);
+                        }
+
+                        $dest = $uploadDir . DIRECTORY_SEPARATOR . $userId . '.' . $ext;
+                        if (move_uploaded_file($tmp, $dest)) {
+                            $avatarRel = 'uploads/users/' . $userId . '.' . $ext;
+                            if (function_exists('ensure_users_avatar_path_column') && ensure_users_avatar_path_column($conn)) {
+                                try {
+                                    $stmtA = $conn->prepare('UPDATE users SET avatar_path = ? WHERE id = ?');
+                                    if ($stmtA) {
+                                        $stmtA->bind_param('si', $avatarRel, $userId);
+                                        $stmtA->execute();
+                                        $stmtA->close();
+                                    }
+                                } catch (Throwable $e) {
+                                }
+                            }
+                            audit_log($conn, 'user.avatar_upload', 'Uploaded avatar for user_id=' . (string)$userId, $userId);
+                            header('Location: admin.php?msg=avatar');
+                            exit();
+                        }
+
+                        $flash = 'Failed to save image.';
+                        $flashType = 'error';
+                    }
+                }
+            }
+        }
+    }
+
     if ($action === 'create_user') {
         require_perm('user.create');
 
@@ -298,6 +378,7 @@ if ($msg === 'deleted') { $flash = 'User deleted.'; $flashType = 'success'; }
 if ($msg === '2fa_on') { $flash = '2FA enabled.'; $flashType = 'success'; }
 if ($msg === '2fa_off') { $flash = '2FA disabled.'; $flashType = 'success'; }
 if ($msg === 'name') { $flash = 'Name updated.'; $flashType = 'success'; }
+if ($msg === 'avatar') { $flash = 'Photo updated.'; $flashType = 'success'; }
 
 $roles = [];
 $users = [];
@@ -319,6 +400,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             FROM users u
             LEFT JOIN user_roles ur ON ur.user_id = u.id
             LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.role <> 'guest'
             GROUP BY u.id
             ORDER BY u.created_at DESC, u.id DESC";
 
@@ -326,6 +408,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             FROM users u
             LEFT JOIN user_roles ur ON ur.user_id = u.id
             LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.role <> 'guest'
             GROUP BY u.id
             ORDER BY u.created_at DESC, u.id DESC";
 
@@ -369,7 +452,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             <div class="page-subtitle">User management and role assignments</div>
         </div>
         <div class="page-meta">
-            <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php require __DIR__ . '/partials/topbar.php'; ?>
         </div>
     </div>
 
@@ -420,9 +503,9 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             </div>
         </div>
 
-        <div class="panel">
+        <div class="panel" id="employees">
             <div class="panel-header">
-                <div class="panel-title">Users</div>
+                <div class="panel-title">Employees</div>
                 <div class="panel-icon bg-blue"><i class='bx bx-group'></i></div>
             </div>
             <div class="panel-body">
@@ -430,7 +513,8 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                     <table class="table">
                         <thead>
                         <tr>
-                            <th>Name</th>
+                            <th>Photo</th>
+                            <th style="min-width: 320px;">Name</th>
                             <th>Username</th>
                             <th>Roles</th>
                             <th>Created</th>
@@ -442,17 +526,44 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                         </thead>
                         <tbody>
                         <?php if (count($users) === 0) { ?>
-                            <tr><td colspan="8" class="muted">No users found.</td></tr>
+                            <tr><td colspan="9" class="muted">No users found.</td></tr>
                         <?php } else { ?>
                             <?php foreach ($users as $u) { ?>
+                                <?php
+                                    $uid = (int)($u['id'] ?? 0);
+                                    $fullNameVal = trim((string)($u['full_name'] ?? ''));
+                                    $displayName = $fullNameVal !== '' ? $fullNameVal : (string)($u['username'] ?? '');
+                                    $avatarUrl = function_exists('user_avatar_url') ? user_avatar_url(isset($conn) && $conn instanceof mysqli ? $conn : null, (int)$uid, '') : '';
+                                ?>
                                 <tr>
-                                    <td>
+                                    <td style="min-width: 130px;">
+                                        <div style="display:flex; align-items:center; gap:10px;">
+                                            <?php if ($avatarUrl !== '') { ?>
+                                                <img src="<?php echo htmlspecialchars($avatarUrl, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width:36px;height:36px;border-radius:999px;object-fit:cover;border:1px solid var(--border);">
+                                            <?php } else { ?>
+                                                <div style="width:36px;height:36px;border-radius:999px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--border);font-weight:800;color:var(--text-muted);">
+                                                    <?php echo htmlspecialchars(strtoupper(substr((string)($u['username'] ?? 'U'), 0, 1)), ENT_QUOTES, 'UTF-8'); ?>
+                                                </div>
+                                            <?php } ?>
+
+                                            <form method="post" enctype="multipart/form-data" style="margin:0; display:flex; align-items:center;">
+                                                <input type="hidden" name="action" value="upload_avatar">
+                                                <input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>">
+                                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                                                <label class="btn" style="padding:6px 10px;">
+                                                    Upload
+                                                    <input type="file" name="avatar_file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="this.form.submit();">
+                                                </label>
+                                            </form>
+                                        </div>
+                                    </td>
+                                    <td style="min-width: 320px;">
                                         <form method="post" class="toolbar" style="grid-template-columns: 1fr auto; margin-bottom: 0;">
                                             <input type="hidden" name="action" value="update_name">
                                             <input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>">
                                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
-                                            <input class="input" type="text" name="full_name" value="<?php echo htmlspecialchars((string)($u['full_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" placeholder="Full name">
-                                            <button class="btn" type="submit" style="padding: 6px 10px;">Save</button>
+                                            <input class="input" type="text" name="full_name" value="<?php echo htmlspecialchars((string)($u['full_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" placeholder="<?php echo htmlspecialchars($displayName !== '' ? $displayName : 'Full name', ENT_QUOTES, 'UTF-8'); ?>" style="min-width: 240px;" <?php echo !$hasFullNameColumn ? 'disabled' : ''; ?>>
+                                            <button class="btn" type="submit" style="padding: 6px 10px;" <?php echo !$hasFullNameColumn ? 'disabled' : ''; ?>>Save</button>
                                         </form>
                                     </td>
                                     <td><?php echo htmlspecialchars((string)$u['username'], ENT_QUOTES, 'UTF-8'); ?></td>
@@ -473,11 +584,11 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                                         </form>
                                     </td>
                                     <td>
-                                        <form method="post" class="toolbar" style="grid-template-columns: 1fr auto; margin-bottom: 0;">
+                                        <form method="post" class="toolbar" style="grid-template-columns: 240px auto; margin-bottom: 0;">
                                             <input type="hidden" name="action" value="reset_password">
                                             <input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>">
                                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
-                                            <input class="input" type="password" name="new_password" placeholder="New password" required>
+                                            <input class="input" type="password" name="new_password" placeholder="New password" required style="min-width: 220px;">
                                             <button class="btn" type="submit">Update</button>
                                         </form>
                                     </td>

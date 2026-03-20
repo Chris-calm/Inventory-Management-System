@@ -245,7 +245,12 @@ $stockValue = $stockQty * $unitCost;
                 <div style="display: grid; grid-template-columns: 120px 1fr; gap: 14px; align-items: start;">
                     <div>
                         <?php if ($hasProdImagePath && !empty($product['image_path'])) { ?>
-                            <img src="<?php echo htmlspecialchars((string)$product['image_path'], ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 120px; height: 120px; object-fit: cover; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08);">
+                            <?php
+                                $__img = (string)$product['image_path'];
+                                $__v = @filemtime(__DIR__ . '/' . $__img);
+                                $__src = $__img . ($__v ? ('?v=' . (string)$__v) : '');
+                            ?>
+                            <img src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 120px; height: 120px; object-fit: cover; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08);">
                         <?php } else { ?>
                             <div class="muted" style="width: 120px; height: 120px; display: grid; place-items: center; border-radius: 14px; border: 1px dashed rgba(255,255,255,0.15);">No image</div>
                         <?php } ?>

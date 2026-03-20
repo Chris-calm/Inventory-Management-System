@@ -51,7 +51,8 @@ CREATE TABLE `role_permissions` (
 INSERT INTO `roles` (`name`) VALUES
 ('head_admin'),
 ('limited_admin'),
-('staff');
+('staff'),
+('guest');
 
 INSERT INTO `permissions` (`perm_key`, `description`) VALUES
 ('dashboard.view', 'View dashboard'),
@@ -64,8 +65,13 @@ INSERT INTO `permissions` (`perm_key`, `description`) VALUES
 ('product.create', 'Create products'),
 ('product.edit', 'Edit products'),
 ('product.delete', 'Delete products'),
+('location.view', 'View locations'),
+('location.create', 'Create locations'),
+('location.edit', 'Edit locations'),
+('location.delete', 'Delete locations'),
 ('movement.view', 'View stock movements'),
 ('movement.create', 'Create stock movements'),
+('movement.approve', 'Approve stock movements/requests'),
 ('user.view', 'View users'),
 ('user.create', 'Create users'),
 ('user.edit', 'Edit users'),
@@ -89,6 +95,7 @@ WHERE r.name = 'limited_admin'
     'dashboard.view','analytics.view',
     'category.view','category.create','category.edit',
     'product.view','product.create','product.edit',
+    'location.view','location.create','location.edit',
     'movement.view','movement.create'
   );
 
@@ -101,7 +108,20 @@ WHERE r.name = 'staff'
   AND p.perm_key IN (
     'dashboard.view','analytics.view',
     'category.view','product.view',
+    'location.view',
     'movement.view','movement.create'
+  );
+
+-- guest: view-only for browsing
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM roles r
+JOIN permissions p
+WHERE r.name = 'guest'
+  AND p.perm_key IN (
+    'dashboard.view',
+    'location.view',
+    'product.view'
   );
 
 -- Assign existing admin user (id=1) as head_admin if present
@@ -110,4 +130,12 @@ SELECT u.id, r.id
 FROM users u
 JOIN roles r ON r.name = 'head_admin'
 WHERE u.username = 'admin'
+ON DUPLICATE KEY UPDATE role_id = role_id;
+
+-- Assign existing guest users to guest role if present
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u
+JOIN roles r ON r.name = 'guest'
+WHERE u.role = 'guest'
 ON DUPLICATE KEY UPDATE role_id = role_id;

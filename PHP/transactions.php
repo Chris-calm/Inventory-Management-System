@@ -2,12 +2,147 @@
 session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/notifications_lib.php';
 
 require_login();
 require_perm('movement.view');
 
 $flash = null;
 $flashType = 'info';
+
+$hasProductsTable = false;
+$hasStockMovementsTable = false;
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    try {
+        if ($res = $conn->query("SHOW TABLES LIKE 'products'")) {
+            $hasProductsTable = (bool)$res->fetch_assoc();
+            $res->free();
+        }
+    } catch (Throwable $e) {
+        $hasProductsTable = false;
+    }
+    try {
+        if ($res = $conn->query("SHOW TABLES LIKE 'stock_movements'")) {
+            $hasStockMovementsTable = (bool)$res->fetch_assoc();
+            $res->free();
+        }
+    } catch (Throwable $e) {
+        $hasStockMovementsTable = false;
+    }
+}
+
+$hasGuestRequestsTable = false;
+$hasGuestRequestItemsTable = false;
+$guestRequestsHistory = [];
+$guestReqItemsByReq = [];
+$filterGuestUserId = 0;
+$guestUsers = [];
+if (function_exists('has_perm') && has_perm('movement.approve')) {
+    $filterGuestUserId = (int)($_GET['guest_user_id'] ?? 0);
+}
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    try {
+        if ($res = $conn->query("SHOW TABLES LIKE 'guest_item_requests'")) {
+            $hasGuestRequestsTable = (bool)$res->fetch_assoc();
+            $res->free();
+        }
+    } catch (Throwable $e) {
+        $hasGuestRequestsTable = false;
+    }
+    try {
+        if ($res = $conn->query("SHOW TABLES LIKE 'guest_item_request_items'")) {
+            $hasGuestRequestItemsTable = (bool)$res->fetch_assoc();
+            $res->free();
+        }
+    } catch (Throwable $e) {
+        $hasGuestRequestItemsTable = false;
+    }
+
+    if (function_exists('has_perm') && has_perm('movement.approve')) {
+        try {
+            if ($resGu = $conn->query("SELECT id, username FROM users WHERE role = 'guest' ORDER BY username ASC")) {
+                while ($r = $resGu->fetch_assoc()) {
+                    $guestUsers[] = $r;
+                }
+                $resGu->free();
+            }
+        } catch (Throwable $e) {
+            $guestUsers = [];
+        }
+    }
+
+    if ($hasGuestRequestsTable && $hasGuestRequestItemsTable) {
+        try {
+            if ($filterGuestUserId > 0) {
+                $stmtGr = $conn->prepare("SELECT r.id, r.guest_user_id, r.location_id, r.warehouse_name, r.status, r.created_at, r.decided_at, r.decided_reason,
+                               COALESCE(u.username, 'Guest') AS guest_name,
+                               COALESCE(l.name, '') AS location_name
+                        FROM guest_item_requests r
+                        LEFT JOIN users u ON u.id = r.guest_user_id
+                        LEFT JOIN locations l ON l.id = r.location_id
+                        WHERE r.status IN ('approved','rejected') AND r.guest_user_id = ?
+                        ORDER BY COALESCE(r.decided_at, r.created_at) DESC, r.id DESC
+                        LIMIT 20");
+                if ($stmtGr) {
+                    $stmtGr->bind_param('i', $filterGuestUserId);
+                    $stmtGr->execute();
+                    $res = $stmtGr->get_result();
+                    if ($res) {
+                        while ($r = $res->fetch_assoc()) {
+                            $guestRequestsHistory[] = $r;
+                        }
+                    }
+                    $stmtGr->close();
+                }
+            } else {
+                $sql = "SELECT r.id, r.guest_user_id, r.location_id, r.warehouse_name, r.status, r.created_at, r.decided_at, r.decided_reason,
+                               COALESCE(u.username, 'Guest') AS guest_name,
+                               COALESCE(l.name, '') AS location_name
+                        FROM guest_item_requests r
+                        LEFT JOIN users u ON u.id = r.guest_user_id
+                        LEFT JOIN locations l ON l.id = r.location_id
+                        WHERE r.status IN ('approved','rejected')
+                        ORDER BY COALESCE(r.decided_at, r.created_at) DESC, r.id DESC
+                        LIMIT 20";
+                if ($res = $conn->query($sql)) {
+                    while ($r = $res->fetch_assoc()) {
+                        $guestRequestsHistory[] = $r;
+                    }
+                    $res->free();
+                }
+            }
+
+            $needIds = [];
+            foreach ($guestRequestsHistory as $gr) {
+                $rid = (int)($gr['id'] ?? 0);
+                if ($rid > 0) {
+                    $needIds[$rid] = true;
+                }
+            }
+            $needIds = array_keys($needIds);
+            if (count($needIds) > 0) {
+                $idList = implode(',', array_map('intval', $needIds));
+                $sql2 = "SELECT request_id, sku, name, qty FROM guest_item_request_items WHERE request_id IN ($idList) ORDER BY id ASC";
+                if ($res2 = $conn->query($sql2)) {
+                    while ($it = $res2->fetch_assoc()) {
+                        $rid = (int)($it['request_id'] ?? 0);
+                        if ($rid <= 0) {
+                            continue;
+                        }
+                        if (!isset($guestReqItemsByReq[$rid])) {
+                            $guestReqItemsByReq[$rid] = [];
+                        }
+                        $guestReqItemsByReq[$rid][] = $it;
+                    }
+                    $res2->free();
+                }
+            }
+        } catch (Throwable $e) {
+            $guestRequestsHistory = [];
+            $guestReqItemsByReq = [];
+        }
+    }
+}
 
 $hasApprovalStatus = false;
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
@@ -66,7 +201,13 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
 }
 
 $products = [];
-if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+if (!$hasProductsTable) {
+    $products = [];
+    if ($flash === null) {
+        $flash = 'Products module is not available yet. Please import inventory_schema.sql.';
+        $flashType = 'error';
+    }
+} elseif (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     if ($res = $conn->query("SELECT id, sku, name, stock_qty, reorder_level FROM products WHERE status = 'active' ORDER BY name ASC")) {
         while ($r = $res->fetch_assoc()) { $products[] = $r; }
         $res->free();
@@ -101,6 +242,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
         echo 'Bad Request';
         exit();
     }
+
+    if (!$hasProductsTable || !$hasStockMovementsTable) {
+        $flash = !$hasStockMovementsTable
+            ? 'Stock module is not available yet. Please import the stock schema.'
+            : 'Products module is not available yet. Please import inventory_schema.sql.';
+        $flashType = 'error';
+    } else {
     $postAction = (string)($_POST['action'] ?? 'create');
 
     if ($postAction === 'approve' || $postAction === 'reject') {
@@ -139,250 +287,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                         throw new Exception('Movement is not pending.');
                     }
 
-                    if ($postAction === 'reject') {
-                        $reason = trim((string)($_POST['rejected_reason'] ?? ''));
-                        if ($reason === '') {
-                            $reason = 'Rejected';
-                        }
-                        $approvedBy = (int)($_SESSION['user_id'] ?? 0);
-                        $stmt2 = $conn->prepare("UPDATE stock_movements SET approval_status = 'rejected', approved_by = ?, approved_at = NOW(), rejected_reason = ? WHERE id = ?");
-                        if (!$stmt2) {
-                            throw new Exception('Failed to update movement.');
-                        }
-                        $stmt2->bind_param('isi', $approvedBy, $reason, $moveId);
-                        if (!$stmt2->execute()) {
-                            $stmt2->close();
-                            throw new Exception('Failed to reject movement.');
-                        }
-                        $stmt2->close();
-
-                        $conn->commit();
-                        audit_log($conn, 'movement.reject', 'movement_id=' . (string)$moveId, null);
-                        header('Location: transactions.php?msg=rejected');
-                        exit();
+                    $newStatus = $postAction === 'approve' ? 'approved' : 'rejected';
+                    $reason = trim((string)($_POST['rejected_reason'] ?? ''));
+                    if ($reason === '') {
+                        $reason = 'Rejected';
                     }
-
-                    $productId2 = (int)($mv['product_id'] ?? 0);
-                    $movementType2 = (string)($mv['movement_type'] ?? '');
-                    $qty2 = (int)($mv['qty'] ?? 0);
-
-                    if ($movementType2 === 'transfer') {
-                        if (!$hasTransferFields || !$hasLocationStocks) {
-                            throw new Exception('Transfer workflow is not enabled yet. Please import locations_schema.sql and stock_schema_v3.sql.');
-                        }
-
-                        $srcType = (string)($mv['source_type'] ?? '');
-                        $srcLocId = (int)($mv['source_location_id'] ?? 0);
-                        $dstType = (string)($mv['dest_type'] ?? '');
-                        $dstLocId = (int)($mv['dest_location_id'] ?? 0);
-
-                        if (!in_array($srcType, ['location', 'supplier'], true)) {
-                            throw new Exception('Invalid transfer source.');
-                        }
-                        if (!in_array($dstType, ['location', 'customer'], true)) {
-                            throw new Exception('Invalid transfer destination.');
-                        }
-                        if ($srcType === 'location' && $srcLocId <= 0) {
-                            throw new Exception('Source location is required.');
-                        }
-                        if ($dstType === 'location' && $dstLocId <= 0) {
-                            throw new Exception('Destination location is required.');
-                        }
-                        if ($srcType === 'location' && $dstType === 'location' && $srcLocId === $dstLocId) {
-                            throw new Exception('Source and destination locations must be different.');
-                        }
-
-                        if ($srcType === 'location') {
-                            $stmt = $conn->prepare("SELECT qty FROM location_stocks WHERE location_id = ? AND product_id = ? FOR UPDATE");
-                            if (!$stmt) {
-                                throw new Exception('Failed to load location stock.');
-                            }
-                            $stmt->bind_param('ii', $srcLocId, $productId2);
-                            $stmt->execute();
-                            $res = $stmt->get_result();
-                            $row = $res ? $res->fetch_assoc() : null;
-                            $stmt->close();
-                            $cur = (int)($row['qty'] ?? 0);
-                            if ($cur < $qty2) {
-                                throw new Exception('Not enough stock in source location.');
-                            }
-                            $newQty = $cur - $qty2;
-                            $stmt2 = $conn->prepare("INSERT INTO location_stocks (location_id, product_id, qty) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE qty = VALUES(qty)");
-                            if (!$stmt2) {
-                                throw new Exception('Failed to update source location stock.');
-                            }
-                            $stmt2->bind_param('iii', $srcLocId, $productId2, $newQty);
-                            if (!$stmt2->execute()) {
-                                $stmt2->close();
-                                throw new Exception('Failed to update source location stock.');
-                            }
-                            $stmt2->close();
-                        }
-
-                        if ($dstType === 'location') {
-                            $stmt = $conn->prepare("SELECT qty FROM location_stocks WHERE location_id = ? AND product_id = ? FOR UPDATE");
-                            if (!$stmt) {
-                                throw new Exception('Failed to load location stock.');
-                            }
-                            $stmt->bind_param('ii', $dstLocId, $productId2);
-                            $stmt->execute();
-                            $res = $stmt->get_result();
-                            $row = $res ? $res->fetch_assoc() : null;
-                            $stmt->close();
-                            $cur = (int)($row['qty'] ?? 0);
-                            $newQty = $cur + $qty2;
-                            $stmt2 = $conn->prepare("INSERT INTO location_stocks (location_id, product_id, qty) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE qty = VALUES(qty)");
-                            if (!$stmt2) {
-                                throw new Exception('Failed to update destination location stock.');
-                            }
-                            $stmt2->bind_param('iii', $dstLocId, $productId2, $newQty);
-                            if (!$stmt2->execute()) {
-                                $stmt2->close();
-                                throw new Exception('Failed to update destination location stock.');
-                            }
-                            $stmt2->close();
-                        }
-
-                        $stmt = $conn->prepare("SELECT stock_qty FROM products WHERE id = ? FOR UPDATE");
-                        if (!$stmt) {
-                            throw new Exception('Failed to load product.');
-                        }
-                        $stmt->bind_param('i', $productId2);
-                        $stmt->execute();
-                        $res = $stmt->get_result();
-                        $row = $res ? $res->fetch_assoc() : null;
-                        $stmt->close();
-                        if (!$row) {
-                            throw new Exception('Product not found.');
-                        }
-                        $curTotal = (int)($row['stock_qty'] ?? 0);
-                        $newTotal = $curTotal;
-                        if ($srcType === 'supplier' && $dstType === 'location') {
-                            $newTotal = $curTotal + $qty2;
-                        } elseif ($srcType === 'location' && $dstType === 'customer') {
-                            if ($curTotal < $qty2) {
-                                throw new Exception('Not enough stock for transfer out.');
-                            }
-                            $newTotal = $curTotal - $qty2;
-                        }
-                        if ($newTotal !== $curTotal) {
-                            $stmt2 = $conn->prepare("UPDATE products SET stock_qty = ? WHERE id = ?");
-                            if (!$stmt2) {
-                                throw new Exception('Failed to update stock.');
-                            }
-                            $stmt2->bind_param('ii', $newTotal, $productId2);
-                            if (!$stmt2->execute()) {
-                                $stmt2->close();
-                                throw new Exception('Failed to update stock.');
-                            }
-                            $stmt2->close();
-                        }
-
-                        $approvedBy = (int)($_SESSION['user_id'] ?? 0);
-                        $stmt3 = $conn->prepare("UPDATE stock_movements SET approval_status = 'approved', approved_by = ?, approved_at = NOW(), rejected_reason = NULL WHERE id = ?");
-                        if (!$stmt3) {
-                            throw new Exception('Failed to update movement.');
-                        }
-                        $stmt3->bind_param('ii', $approvedBy, $moveId);
-                        if (!$stmt3->execute()) {
-                            $stmt3->close();
-                            throw new Exception('Failed to approve movement.');
-                        }
-                        $stmt3->close();
-
-                        $conn->commit();
-                        audit_log($conn, 'movement.approve', 'movement_id=' . (string)$moveId, null);
-                        header('Location: transactions.php?msg=approved');
-                        exit();
-                    }
-
-                    if (($movementType2 === 'in' || $movementType2 === 'out') && $hasTransferFields && $hasLocationStocks) {
-                        $locId = 0;
-                        if ($movementType2 === 'in') {
-                            $locId = (int)($mv['dest_location_id'] ?? 0);
-                        } else {
-                            $locId = (int)($mv['source_location_id'] ?? 0);
-                        }
-
-                        if ($locId > 0) {
-                            $stmt = $conn->prepare("SELECT qty FROM location_stocks WHERE location_id = ? AND product_id = ? FOR UPDATE");
-                            if (!$stmt) {
-                                throw new Exception('Failed to load location stock.');
-                            }
-                            $stmt->bind_param('ii', $locId, $productId2);
-                            $stmt->execute();
-                            $res = $stmt->get_result();
-                            $row = $res ? $res->fetch_assoc() : null;
-                            $stmt->close();
-
-                            $cur = (int)($row['qty'] ?? 0);
-                            if ($movementType2 === 'out' && $cur < $qty2) {
-                                throw new Exception('Not enough stock in source location.');
-                            }
-                            $newQty = $cur + ($movementType2 === 'in' ? $qty2 : -$qty2);
-                            $stmt2 = $conn->prepare("INSERT INTO location_stocks (location_id, product_id, qty) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE qty = VALUES(qty)");
-                            if (!$stmt2) {
-                                throw new Exception('Failed to update location stock.');
-                            }
-                            $stmt2->bind_param('iii', $locId, $productId2, $newQty);
-                            if (!$stmt2->execute()) {
-                                $stmt2->close();
-                                throw new Exception('Failed to update location stock.');
-                            }
-                            $stmt2->close();
-                        }
-                    }
-
-                    $stmt = $conn->prepare("SELECT stock_qty FROM products WHERE id = ? FOR UPDATE");
-                    if (!$stmt) {
-                        throw new Exception('Failed to load product.');
-                    }
-                    $stmt->bind_param('i', $productId2);
-                    $stmt->execute();
-                    $res = $stmt->get_result();
-                    $row = $res ? $res->fetch_assoc() : null;
-                    $stmt->close();
-                    if (!$row) {
-                        throw new Exception('Product not found.');
-                    }
-
-                    $currentStock = (int)($row['stock_qty'] ?? 0);
-                    $newStock = $currentStock;
-                    if ($movementType2 === 'in') {
-                        $newStock = $currentStock + $qty2;
-                    } elseif ($movementType2 === 'out') {
-                        if ($currentStock < $qty2) {
-                            throw new Exception('Not enough stock for stock out.');
-                        }
-                        $newStock = $currentStock - $qty2;
-                    } elseif ($movementType2 === 'adjust') {
-                        $newStock = $qty2;
-                    } else {
-                        throw new Exception('Invalid movement type.');
-                    }
-
-                    $stmt2 = $conn->prepare("UPDATE products SET stock_qty = ? WHERE id = ?");
-                    if (!$stmt2) {
-                        throw new Exception('Failed to update stock.');
-                    }
-                    $stmt2->bind_param('ii', $newStock, $productId2);
-                    if (!$stmt2->execute()) {
-                        $stmt2->close();
-                        throw new Exception('Failed to update stock.');
-                    }
-                    $stmt2->close();
-
                     $approvedBy = (int)($_SESSION['user_id'] ?? 0);
-                    $stmt3 = $conn->prepare("UPDATE stock_movements SET approval_status = 'approved', approved_by = ?, approved_at = NOW(), rejected_reason = NULL WHERE id = ?");
-                    if (!$stmt3) {
+                    $stmtUp = $conn->prepare("UPDATE stock_movements SET approval_status = ?, approved_by = ?, approved_at = NOW(), rejected_reason = ? WHERE id = ?");
+                    if (!$stmtUp) {
                         throw new Exception('Failed to update movement.');
                     }
-                    $stmt3->bind_param('ii', $approvedBy, $moveId);
-                    if (!$stmt3->execute()) {
-                        $stmt3->close();
-                        throw new Exception('Failed to approve movement.');
+                    $stmtUp->bind_param('sisi', $newStatus, $approvedBy, $reason, $moveId);
+                    if (!$stmtUp->execute()) {
+                        $stmtUp->close();
+                        throw new Exception('Failed to update movement.');
                     }
-                    $stmt3->close();
+                    $stmtUp->close();
+
+                    try {
+                        $actorId = (int)($_SESSION['user_id'] ?? 0);
+                        $title = $newStatus === 'approved' ? 'Stock movement approved' : 'Stock movement rejected';
+                        $msgN = 'Movement #' . (string)$moveId . ' was ' . $newStatus . '.';
+                        notifications_create($conn, $actorId, $title, $msgN, 'transactions.php', $newStatus === 'approved' ? 'success' : 'warning');
+
+                        if ($resU = $conn->query("SELECT id FROM users WHERE role = 'admin'")) {
+                            while ($u = $resU->fetch_assoc()) {
+                                $uid = (int)($u['id'] ?? 0);
+                                if ($uid > 0 && $uid !== $actorId) {
+                                    notifications_create($conn, $uid, $title, $msgN, 'transactions.php', $newStatus === 'approved' ? 'success' : 'warning');
+                                }
+                            }
+                            $resU->free();
+                        }
+                    } catch (Throwable $e) {
+                    }
 
                     $conn->commit();
                     audit_log($conn, 'movement.approve', 'movement_id=' . (string)$moveId, null);
@@ -771,7 +709,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                     'product_id=' . (string)$productId . ';type=' . (string)$movementType . ';qty=' . (string)$qty,
                     null
                 );
-                header('Location: transactions.php?msg=ok');
+
+                try {
+                    $t = 'Stock movement created';
+                    $m = 'Created a ' . $movementType . ' movement for product_id=' . (string)$productId . ' qty=' . (string)$qty . '.';
+                    notifications_create($conn, $createdBy, $t, $m, 'transactions.php', 'info');
+
+                    if ($resU = $conn->query("SELECT id FROM users WHERE role = 'admin'")) {
+                        while ($u = $resU->fetch_assoc()) {
+                            $uid = (int)($u['id'] ?? 0);
+                            if ($uid > 0 && $uid !== $createdBy) {
+                                notifications_create($conn, $uid, $t, $m, 'transactions.php', 'info');
+                            }
+                        }
+                        $resU->free();
+                    }
+                } catch (Throwable $e) {
+                }
+
+                header('Location: transactions.php?msg=created');
                 exit();
             } catch (Throwable $e) {
                 $conn->rollback();
@@ -779,6 +735,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($conn) && $conn instanceof my
                 $flashType = 'error';
             }
         }
+    }
+
     }
 }
 
@@ -855,7 +813,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             <div class="page-subtitle">Record stock movements and keep inventory accurate</div>
         </div>
         <div class="page-meta">
-            <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php require __DIR__ . '/partials/topbar.php'; ?>
         </div>
     </div>
 
@@ -1027,6 +985,55 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                             </tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+        <?php } ?>
+
+        <?php if (has_perm('movement.approve')) { ?>
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">Guest Requests (Approved / Rejected)</div>
+                    <div class="panel-icon bg-green"><i class='bx bx-package'></i></div>
+                </div>
+                <div class="panel-body">
+                    <form method="get" style="margin-bottom: 10px; display:flex; gap: 10px; flex-wrap: wrap; align-items: end;">
+                        <div>
+                            <label class="label">Guest user</label>
+                            <select class="input" name="guest_user_id" onchange="this.form.submit()" style="min-width: 220px;">
+                                <option value="0" <?php echo $filterGuestUserId === 0 ? 'selected' : ''; ?>>All guests</option>
+                                <?php foreach ($guestUsers as $gu) { $gid = (int)($gu['id'] ?? 0); ?>
+                                    <option value="<?php echo (int)$gid; ?>" <?php echo $filterGuestUserId === $gid ? 'selected' : ''; ?>><?php echo htmlspecialchars((string)($gu['username'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php } ?>
+                            </select>
+                        </div>
+                    </form>
+                    <?php if (!$hasGuestRequestsTable || !$hasGuestRequestItemsTable) { ?>
+                        <div class="muted">Guest requests module is not available yet.</div>
+                    <?php } elseif (count($guestRequestsHistory) === 0) { ?>
+                        <div class="muted">No approved/rejected guest requests yet.</div>
+                    <?php } else { ?>
+                        <div style="display:grid; gap: 10px;">
+                            <?php foreach ($guestRequestsHistory as $gr) { $rid = (int)($gr['id'] ?? 0); $items = $guestReqItemsByReq[$rid] ?? []; ?>
+                                <div class="guest-item" style="grid-template-columns: 1fr;">
+                                    <div>
+                                        <div class="t">#<?php echo (int)$rid; ?> · <?php echo htmlspecialchars((string)($gr['guest_name'] ?? 'Guest'), ENT_QUOTES, 'UTF-8'); ?> · <?php echo htmlspecialchars((string)($gr['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+                                        <div class="m">Warehouse: <?php echo htmlspecialchars((string)($gr['warehouse_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><?php if (!empty($gr['location_name'])) { ?> · Location: <?php echo htmlspecialchars((string)($gr['location_name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><?php } ?></div>
+                                        <div class="m"><?php echo htmlspecialchars((string)($gr['decided_at'] ?? $gr['created_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><?php if (!empty($gr['decided_reason'])) { ?> · <?php echo htmlspecialchars((string)($gr['decided_reason'] ?? ''), ENT_QUOTES, 'UTF-8'); ?><?php } ?></div>
+
+                                        <?php if (count($items) > 0) { ?>
+                                            <div style="margin-top: 8px; display:grid; gap: 6px;">
+                                                <?php foreach ($items as $it) { ?>
+                                                    <div class="muted"><?php echo htmlspecialchars((string)($it['sku'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · <?php echo htmlspecialchars((string)($it['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?> · Qty: <?php echo (int)($it['qty'] ?? 0); ?></div>
+                                                <?php } ?>
+                                            </div>
+                                        <?php } else { ?>
+                                            <div class="muted" style="margin-top: 8px;">No items found for this request.</div>
+                                        <?php } ?>
+                                    </div>
+                                </div>
+                            <?php } ?>
+                        </div>
+                    <?php } ?>
                 </div>
             </div>
         <?php } ?>

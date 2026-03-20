@@ -17,6 +17,16 @@ if (!isset($pageTitle) || !is_string($pageTitle) || $pageTitle === '') {
         } catch (e) {}
     })();
 </script>
+<script>
+    tailwind = {
+        config: {
+            corePlugins: {
+                preflight: false,
+            },
+        },
+    };
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="../CSS/style2.css">
 <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
 <title><?php echo htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8'); ?></title>

@@ -6,8 +6,95 @@ require_once __DIR__ . '/security.php';
 require_login();
 require_perm('location.view');
 
+$__role = (string)($_SESSION['role'] ?? '');
+
 $flash = null;
 $flashType = 'info';
+
+$categories = [];
+$hasCategoriesTable = false;
+if ($__role === 'guest' && isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    try {
+        if ($res = $conn->query("SHOW TABLES LIKE 'categories'")) {
+            $hasCategoriesTable = (bool)$res->fetch_assoc();
+            $res->free();
+        }
+    } catch (Throwable $e) {
+        $hasCategoriesTable = false;
+    }
+
+    if ($hasCategoriesTable) {
+        try {
+            $hasCatStatus = false;
+            if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'status'")) {
+                $stmtCol->execute();
+                $c = 0;
+                $stmtCol->bind_result($c);
+                if ($stmtCol->fetch()) {
+                    $hasCatStatus = ((int)$c) > 0;
+                }
+                $stmtCol->close();
+            }
+
+            $hasCatArchived = false;
+            if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'categories' AND COLUMN_NAME = 'archived_at'")) {
+                $stmtCol->execute();
+                $c = 0;
+                $stmtCol->bind_result($c);
+                if ($stmtCol->fetch()) {
+                    $hasCatArchived = ((int)$c) > 0;
+                }
+                $stmtCol->close();
+            }
+
+            $whereParts = [];
+            if ($hasCatStatus) {
+                $whereParts[] = "status = 'active'";
+            }
+            if ($hasCatArchived) {
+                $whereParts[] = 'archived_at IS NULL';
+            }
+
+            $sqlCat = 'SELECT id, name FROM categories';
+            if (count($whereParts) > 0) {
+                $sqlCat .= ' WHERE ' . implode(' AND ', $whereParts);
+            }
+            $sqlCat .= ' ORDER BY name ASC';
+            if ($res = $conn->query($sqlCat)) {
+                while ($r = $res->fetch_assoc()) {
+                    $categories[] = $r;
+                }
+                $res->free();
+            }
+        } catch (Throwable $e) {
+            $categories = [];
+        }
+    }
+}
+
+$hasOccupiedColumn = false;
+if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
+    if ($stmtCol = $conn->prepare("SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'locations' AND COLUMN_NAME = 'is_occupied'")) {
+        $stmtCol->execute();
+        $c = 0;
+        $stmtCol->bind_result($c);
+        if ($stmtCol->fetch()) {
+            $hasOccupiedColumn = ((int)$c) > 0;
+        }
+        $stmtCol->close();
+    }
+
+    if (!$hasOccupiedColumn) {
+        try {
+            $conn->query("ALTER TABLE locations ADD COLUMN is_occupied TINYINT(1) NOT NULL DEFAULT 0");
+            $conn->query("ALTER TABLE locations ADD COLUMN occupied_request_id INT NULL");
+            $conn->query("ALTER TABLE locations ADD COLUMN occupied_at TIMESTAMP NULL");
+            $hasOccupiedColumn = true;
+        } catch (Throwable $e) {
+            $hasOccupiedColumn = false;
+        }
+    }
+}
 
 $hasImagePathColumn = false;
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
@@ -237,13 +324,30 @@ if ($msg === 'deleted') { $flash = 'Location deleted.'; $flashType = 'success'; 
 
 $rows = [];
 if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
-    $listCols = "id, name, code, notes, status, created_at";
+    $listCols = "id, name, code, notes, status";
     if ($hasImagePathColumn) {
         $listCols .= ", image_path";
     } else {
         $listCols .= ", NULL AS image_path";
     }
-    if ($res = $conn->query("SELECT $listCols FROM locations ORDER BY name ASC")) {
+    if ($hasOccupiedColumn) {
+        $listCols .= ", is_occupied";
+    } else {
+        $listCols .= ", 0 AS is_occupied";
+    }
+
+    $where = [];
+    if ($__role === 'guest' && $hasOccupiedColumn) {
+        $where[] = 'is_occupied = 0';
+    }
+
+    $sql = "SELECT $listCols FROM locations";
+    if (count($where) > 0) {
+        $sql .= ' WHERE ' . implode(' AND ', $where);
+    }
+    $sql .= ' ORDER BY name ASC';
+
+    if ($res = $conn->query($sql)) {
         while ($r = $res->fetch_assoc()) { $rows[] = $r; }
         $res->free();
     }
@@ -262,83 +366,130 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
     <div class="page-header">
         <div>
             <div class="page-title">Locations</div>
-            <div class="page-subtitle">Manage storage locations for transfers and stock tracking</div>
+            <div class="page-subtitle"><?php echo $__role === 'guest' ? 'Browse available warehouses and storage locations' : 'Manage storage locations for transfers and stock tracking'; ?></div>
         </div>
         <div class="page-meta">
-            <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php require __DIR__ . '/partials/topbar.php'; ?>
         </div>
     </div>
 
     <div class="content-grid">
-        <div class="panel">
-            <div class="panel-header">
-                <div class="panel-title"><?php echo $action === 'edit' ? 'Edit Location' : 'Add Location'; ?></div>
-                <div class="panel-icon bg-blue"><i class='bx bx-map-pin'></i></div>
-            </div>
-            <div class="panel-body">
-                <?php if ($flash) { ?>
-                    <div class="alert <?php echo htmlspecialchars($flashType, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($flash, ENT_QUOTES, 'UTF-8'); ?></div>
-                <?php } ?>
+        <?php if ($__role === 'guest') { ?>
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">Selected Warehouse & Items</div>
+                    <div class="panel-icon bg-purple"><i class='bx bx-package'></i></div>
+                </div>
+                <div class="panel-body">
+                    <div id="guest-warehouse-pill" class="muted">No warehouse selected. Click a warehouse card and select it.</div>
 
-                <form method="post" class="form" <?php echo $hasImagePathColumn ? 'enctype="multipart/form-data"' : ''; ?>>
-                    <input type="hidden" name="action" value="save">
-                    <input type="hidden" name="id" value="<?php echo (int)($action === 'edit' ? $id : 0); ?>">
-                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
-                    <?php if ($hasImagePathColumn) { ?>
-                        <input type="hidden" name="existing_image_path" value="<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>">
+                    <div style="margin-top: 12px; display: grid; gap: 10px;">
+                        <div class="toolbar" style="grid-template-columns: 1fr 1fr; margin: 0;">
+                            <input id="guest-add-sku" class="input" type="text" placeholder="SKU (optional)">
+                            <input id="guest-add-name" class="input" type="text" placeholder="Name (required if SKU is blank)">
+                        </div>
+                        <div class="toolbar" style="grid-template-columns: 1fr 1fr 120px; margin: 0;">
+                            <select id="guest-add-category" class="input">
+                                <option value="">— Category (optional) —</option>
+                                <?php foreach ($categories as $c) { ?>
+                                    <option value="<?php echo (int)($c['id'] ?? 0); ?>"><?php echo htmlspecialchars((string)($c['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></option>
+                                <?php } ?>
+                            </select>
+                            <input id="guest-add-unit-cost" class="input" type="number" step="0.01" min="0" placeholder="Unit Cost (optional)">
+                            <input id="guest-add-qty" class="input" type="number" min="1" value="1" placeholder="Qty">
+                        </div>
+                        <div class="toolbar" style="grid-template-columns: 1fr 1fr 160px auto; margin: 0;">
+                            <input id="guest-add-unit-price" class="input" type="number" step="0.01" min="0" placeholder="Unit Price (optional)">
+                            <input id="guest-add-reorder-level" class="input" type="number" min="0" placeholder="Reorder Level (optional)">
+                            <button id="guest-add-btn" class="btn primary" type="button">Add</button>
+                            <button id="guest-clear-items" class="btn danger" type="button">Clear Items</button>
+                        </div>
+                        <div id="guest-items"></div>
+                        <div style="display:flex; gap: 10px; flex-wrap: wrap;">
+                            <a id="guest-continue" class="btn primary" href="product.php">Continue to Products & Pricing</a>
+                        </div>
+                        <div class="muted">Tip: you can also click a product later in Products & Pricing to add items.</div>
+                    </div>
+                </div>
+            </div>
+        <?php } ?>
+
+        <?php if (has_perm('location.create') || has_perm('location.edit')) { ?>
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title"><?php echo $action === 'edit' ? 'Edit Location' : 'Add Location'; ?></div>
+                    <div class="panel-icon bg-blue"><i class='bx bx-map-pin'></i></div>
+                </div>
+                <div class="panel-body">
+                    <?php if ($flash) { ?>
+                        <div class="alert <?php echo htmlspecialchars($flashType, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($flash, ENT_QUOTES, 'UTF-8'); ?></div>
                     <?php } ?>
 
-                    <div class="form-row">
-                        <label class="label">Name</label>
-                        <input class="input" type="text" name="name" value="<?php echo htmlspecialchars($name, ENT_QUOTES, 'UTF-8'); ?>" required>
-                    </div>
+                    <form method="post" class="form" <?php echo $hasImagePathColumn ? 'enctype="multipart/form-data"' : ''; ?>>
+                        <input type="hidden" name="action" value="save">
+                        <input type="hidden" name="id" value="<?php echo (int)($action === 'edit' ? $id : 0); ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php if ($hasImagePathColumn) { ?>
+                            <input type="hidden" name="existing_image_path" value="<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php } ?>
 
-                    <div class="form-row">
-                        <label class="label">Code</label>
-                        <input class="input" type="text" name="code" value="<?php echo htmlspecialchars($code, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
-                    </div>
-
-                    <div class="form-row">
-                        <label class="label">Notes</label>
-                        <input class="input" type="text" name="notes" value="<?php echo htmlspecialchars($notes, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
-                    </div>
-
-                    <div class="form-row">
-                        <label class="label">Status</label>
-                        <select class="input" name="status">
-                            <option value="active" <?php echo $status === 'active' ? 'selected' : ''; ?>>Active</option>
-                            <option value="inactive" <?php echo $status === 'inactive' ? 'selected' : ''; ?>>Inactive</option>
-                        </select>
-                    </div>
-
-                    <?php if ($hasImagePathColumn) { ?>
                         <div class="form-row">
-                            <label class="label">Image</label>
-                            <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp">
-                            <?php if ($imagePath !== '') { ?>
-                                <div class="muted" style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
-                                    <img class="thumb" src="../<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>" alt="">
-                                    <span>Current image</span>
-                                </div>
+                            <label class="label">Name</label>
+                            <input class="input" type="text" name="name" value="<?php echo htmlspecialchars($name, ENT_QUOTES, 'UTF-8'); ?>" required>
+                        </div>
+
+                        <div class="form-row">
+                            <label class="label">Code</label>
+                            <input class="input" type="text" name="code" value="<?php echo htmlspecialchars($code, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
+                        </div>
+
+                        <div class="form-row">
+                            <label class="label">Notes</label>
+                            <input class="input" type="text" name="notes" value="<?php echo htmlspecialchars($notes, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional">
+                        </div>
+
+                        <div class="form-row">
+                            <label class="label">Status</label>
+                            <select class="input" name="status">
+                                <option value="active" <?php echo $status === 'active' ? 'selected' : ''; ?>>Active</option>
+                                <option value="inactive" <?php echo $status === 'inactive' ? 'selected' : ''; ?>>Inactive</option>
+                            </select>
+                        </div>
+
+                        <?php if ($hasImagePathColumn) { ?>
+                            <div class="form-row">
+                                <label class="label">Image</label>
+                                <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp">
+                                <?php if ($imagePath !== '') { ?>
+                                    <div class="muted" style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
+                                        <?php
+                                            $__img = (string)$imagePath;
+                                            $__v = @filemtime(dirname(__DIR__) . '/' . $__img);
+                                            $__src = '../' . $__img . ($__v ? ('?v=' . (string)$__v) : '');
+                                        ?>
+                                        <img class="thumb" src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                        <span>Current image</span>
+                                    </div>
+                                <?php } ?>
+                            </div>
+                        <?php } ?>
+
+                        <div class="form-actions">
+                            <?php if ($action === 'edit') { ?>
+                                <?php if (has_perm('location.edit')) { ?>
+                                    <button class="btn primary" type="submit">Update</button>
+                                <?php } ?>
+                                <a class="btn" href="locations.php">Cancel</a>
+                            <?php } else { ?>
+                                <?php if (has_perm('location.create')) { ?>
+                                    <button class="btn primary" type="submit">Create</button>
+                                <?php } ?>
                             <?php } ?>
                         </div>
-                    <?php } ?>
-
-                    <div class="form-actions">
-                        <?php if ($action === 'edit') { ?>
-                            <?php if (has_perm('location.edit')) { ?>
-                                <button class="btn primary" type="submit">Update</button>
-                            <?php } ?>
-                            <a class="btn" href="locations.php">Cancel</a>
-                        <?php } else { ?>
-                            <?php if (has_perm('location.create')) { ?>
-                                <button class="btn primary" type="submit">Create</button>
-                            <?php } ?>
-                        <?php } ?>
-                    </div>
-                </form>
+                    </form>
+                </div>
             </div>
-        </div>
+        <?php } ?>
 
         <div class="panel">
             <div class="panel-header">
@@ -351,10 +502,28 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                 <?php } else { ?>
                     <div class="card-grid">
                         <?php foreach ($rows as $r) { ?>
-                            <div class="card-item">
+                            <?php
+                                $__img = !empty($r['image_path']) ? (string)$r['image_path'] : '';
+                                $__src = '';
+                                if ($__img !== '') {
+                                    $__v = @filemtime(dirname(__DIR__) . '/' . $__img);
+                                    $__src = '../' . $__img . ($__v ? ('?v=' . (string)$__v) : '');
+                                }
+                            ?>
+                            <div class="card-item js-open-modal" data-modal-type="location" data-location-id="<?php echo (int)($r['id'] ?? 0); ?>"
+                                 data-title="<?php echo htmlspecialchars((string)($r['name'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>"
+                                 data-subtitle="Code: <?php echo htmlspecialchars((string)($r['code'] ?? '—'), ENT_QUOTES, 'UTF-8'); ?>"
+                                 data-meta1-label="Status"
+                                 data-meta1-value="<?php echo htmlspecialchars((string)($r['status'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>"
+                                 data-meta2-label="Notes"
+                                 data-meta2-value="<?php echo htmlspecialchars((string)($r['notes'] ?? '—'), ENT_QUOTES, 'UTF-8'); ?>"
+                                 data-image-src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>"
+                                 tabindex="0" role="button">
                                 <div class="card-img">
-                                    <?php if (!empty($r['image_path'])) { ?>
-                                        <img src="../<?php echo htmlspecialchars((string)$r['image_path'], ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <?php if ($__src !== '') { ?>
+                                        <img src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <?php } else { ?>
+                                        <div class="muted" style="width:100%;height:100%;display:grid;place-items:center;">No image</div>
                                     <?php } ?>
                                 </div>
                                 <div class="card-body">
@@ -386,6 +555,38 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
         </div>
     </div>
 </section>
+
+<div id="ims-detail-modal" class="ims-modal" style="display:none;">
+    <div class="ims-modal-backdrop" data-modal-close="1"></div>
+    <div class="ims-modal-card" role="dialog" aria-modal="true">
+        <div class="ims-modal-head">
+            <div class="ims-modal-head-text">
+                <div class="ims-modal-title" id="ims-modal-title"></div>
+                <div class="ims-modal-subtitle muted" id="ims-modal-subtitle"></div>
+            </div>
+            <button type="button" class="btn" data-modal-close="1" style="padding:6px 10px;">Close</button>
+        </div>
+        <div class="ims-modal-body">
+            <div class="ims-modal-grid">
+                <div class="ims-modal-image">
+                    <img id="ims-modal-image" src="" alt="" style="display:none;">
+                    <div id="ims-modal-image-empty" class="muted" style="padding:14px;">No image</div>
+                </div>
+                <div class="ims-modal-details">
+                    <div class="ims-modal-row">
+                        <div class="ims-modal-label" id="ims-modal-meta1-label"></div>
+                        <div class="ims-modal-value" id="ims-modal-meta1-value"></div>
+                    </div>
+                    <div class="ims-modal-row">
+                        <div class="ims-modal-label" id="ims-modal-meta2-label"></div>
+                        <div class="ims-modal-value" id="ims-modal-meta2-value"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="ims-modal-actions" class="ims-modal-actions"></div>
+        </div>
+    </div>
+</div>
 
 <script src="../JS/script.js?v=20260225"></script>
 </body>

@@ -5,6 +5,11 @@ require_once __DIR__ . '/PHP/db.php';
 require_once __DIR__ . '/PHP/security.php';
 
 $error = null;
+$success = null;
+
+if ((string)($_GET['msg'] ?? '') === 'registered') {
+    $success = 'Account created. Please sign in.';
+}
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $username = trim((string)($_POST["username"] ?? ''));
@@ -44,17 +49,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         $ok = true;
                     }
                 }
-
                 if ($ok) {
                     $userId = (int)($user['id'] ?? 0);
                     $totpEnabled = (int)($user['totp_enabled'] ?? 0);
                     $totpSecret = (string)($user['totp_secret'] ?? '');
+                    $role = (string)($user['role'] ?? 'staff');
+                    if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error && function_exists('user_effective_role')) {
+                        $role = user_effective_role($conn, $userId, $role);
+                    }
+
+                    if ($role === 'guest' && ($totpEnabled !== 1 || $totpSecret === '')) {
+                        $_SESSION['2fa_setup_pending'] = [
+                            'user_id' => $userId,
+                            'username' => (string)$user['username'],
+                            'role' => $role,
+                        ];
+                        audit_log($conn, 'auth.password_ok_guest_2fa_setup_required', 'Guest 2FA setup required for user: ' . (string)$user['username'], $userId);
+                        header('Location: PHP/2fa_setup.php');
+                        exit();
+                    }
 
                     if ($totpEnabled === 1 && $totpSecret !== '') {
                         $_SESSION['2fa_pending'] = [
                             'user_id' => $userId,
                             'username' => (string)$user['username'],
-                            'role' => (string)($user['role'] ?? 'staff'),
+                            'role' => $role,
                             'totp_secret' => $totpSecret,
                         ];
                         audit_log($conn, 'auth.password_ok_2fa_required', '2FA required for user: ' . (string)$user['username'], $userId);
@@ -65,7 +84,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     session_regenerate_id(true);
                     $_SESSION["user_id"] = $userId;
                     $_SESSION["username"] = (string)$user['username'];
-                    $_SESSION["role"] = (string)($user['role'] ?? 'staff');
+                    $_SESSION["role"] = $role;
 
                     $_SESSION['perms'] = [];
                     if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
@@ -76,6 +95,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         }
 
                         if ($rbacOk) {
+                            if (function_exists('ensure_perm_movement_approve')) {
+                                ensure_perm_movement_approve($conn);
+                            }
                             $_SESSION['perms'] = load_user_permissions($conn, (int)$user['id']);
                         }
 
@@ -101,6 +123,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                                     'movement.create' => true,
                                     'movement.approve' => true,
                                 ];
+                            } elseif ($fallbackRole === 'guest') {
+                                $_SESSION['perms'] = [
+                                    'dashboard.view' => true,
+                                    'location.view' => true,
+                                    'product.view' => true,
+                                ];
                             } else {
                                 $_SESSION['perms'] = [
                                     'dashboard.view' => true,
@@ -114,7 +142,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         }
                     }
                     audit_log($conn, 'auth.login_success', 'Login success for user: ' . (string)$user['username'], $userId);
-                    header("Location: PHP/dashboard.php");
+                    if ($role === 'guest') {
+                        header("Location: PHP/guest_home.php");
+                    } else {
+                        header("Location: PHP/dashboard.php");
+                    }
                     exit();
                 }
 
@@ -140,9 +172,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <form action="" method="POST">
             <h1>Sign in</h1>
             <?php if ($error) echo "<p style='color: red;'>" . htmlspecialchars($error, ENT_QUOTES, 'UTF-8') . "</p>"; ?>
+            <?php if ($success) echo "<p style='color: green;'>" . htmlspecialchars($success, ENT_QUOTES, 'UTF-8') . "</p>"; ?>
             <input type="text" name="username" placeholder="Username" required />
             <input type="password" name="password" placeholder="Password" required />
             <a href="#">Forgot your password?</a>
+            <a href="PHP/register.php">Create account</a>
             <button type="submit">Sign In</button>
         </form>
     </div>

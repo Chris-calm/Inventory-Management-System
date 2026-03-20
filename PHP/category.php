@@ -764,7 +764,7 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
             <div class="page-subtitle">Manage your product categories</div>
         </div>
         <div class="page-meta">
-            <div class="meta-pill">Signed in as: <?php echo htmlspecialchars((string)($_SESSION["username"] ?? ''), ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php require __DIR__ . '/partials/topbar.php'; ?>
         </div>
     </div>
 
@@ -858,7 +858,12 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                             <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp">
                             <?php if ($imagePath !== '') { ?>
                                 <div class="muted" style="margin-top: 8px; display: flex; align-items: center; gap: 10px;">
-                                    <img class="thumb" src="../<?php echo htmlspecialchars($imagePath, ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                    <?php
+                                        $__img = (string)$imagePath;
+                                        $__v = @filemtime(dirname(__DIR__) . '/' . $__img);
+                                        $__src = '../' . $__img . ($__v ? ('?v=' . (string)$__v) : '');
+                                    ?>
+                                    <img class="thumb" src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>" alt="">
                                     <span>Current image</span>
                                 </div>
                             <?php } ?>
@@ -941,7 +946,12 @@ if (isset($conn) && $conn instanceof mysqli && !$conn->connect_error) {
                                     <?php if ($hasImagePathColumn) { ?>
                                         <td>
                                             <?php if (!empty($r['image_path'])) { ?>
-                                                <img class="thumb" src="../<?php echo htmlspecialchars((string)($r['image_path'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" alt="">
+                                                <?php
+                                                    $__img = (string)($r['image_path'] ?? '');
+                                                    $__v = @filemtime(dirname(__DIR__) . '/' . $__img);
+                                                    $__src = '../' . $__img . ($__v ? ('?v=' . (string)$__v) : '');
+                                                ?>
+                                                <img class="thumb" src="<?php echo htmlspecialchars($__src, ENT_QUOTES, 'UTF-8'); ?>" alt="">
                                             <?php } else { ?>
                                                 <span class="muted">—</span>
                                             <?php } ?>
